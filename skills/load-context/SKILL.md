@@ -4,7 +4,7 @@ description: Load earlier Claude Code (and opencode) chats into this session as 
 argument-hint: "[preset ...] (default: the preset named default; --list shows the saved presets)"
 ---
 
-Load earlier chats with The Researcher's `--context` mode. The loader is the `researcher` program (the Rust version, on PATH). If `command -v researcher` finds nothing, use the Python version instead: replace `researcher` with `python3 -I ~/.claude/skills/researcher/researcher.py` in every command below (it needs the `researcher` skill installed next to this one). Both take the same arguments and print the same lines.
+Load earlier chats with The Researcher's `--context` mode. The loader is the `researcher` program (the Rust version, on PATH). If `command -v researcher` finds nothing, use the Python version instead: replace `researcher` with `python3 -I <folder of this SKILL.md>/../researcher/researcher.py` in every command below (it needs the `researcher` skill installed next to this one, in the same skills folder). Both take the same arguments and print the same lines.
 
 1. Pick the preset name(s) from the user's words (a project or topic, e.g. `noname`; nothing named → no name, which uses the preset `default`), then run it **in the foreground with `timeout: 600000`** (it opens a popup and waits for the user; no tokens are spent while it is open):
    ```bash

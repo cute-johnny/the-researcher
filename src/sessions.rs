@@ -387,6 +387,7 @@ fn scan_opencode(
     *live_out = live.map(str::to_string); // an earlier scan from Claude Code may have registered it
     let cache = util::join(&util::dirname(reg_path), "sessions-opencode");
     let mut todo: Vec<(String, f64, String, String)> = Vec::new(); // id, mtime, directory, cache file
+    let mut added = 0;
     for v in &list {
         let Some(sid) = v.get("id").and_then(Value::as_str).filter(|i| OC_ID_RE.is_match(i)) else { continue };
         let mtime = upd(v);
@@ -395,6 +396,11 @@ fn scan_opencode(
         }
         let path = util::join(&cache, &format!("{sid}.jsonl"));
         if up_to_date(reg, sid, &path, mtime) && fs::metadata(&path).is_ok_and(|m| m.is_file()) {
+            continue;
+        }
+        if fs::metadata(&path).is_ok_and(|m| m.is_file() && util::mtime_secs(&m) >= mtime) {
+            // exported after its last change (an empty chat never gets a record): read the copy
+            added += register(reg, sid, &path, mtime, "opencode", Some("opencode"), &read_transcript(&path));
             continue;
         }
         let dir = v.get("directory").and_then(Value::as_str).unwrap_or("").to_string();
@@ -420,7 +426,6 @@ fn scan_opencode(
         }
     });
     let done = done.into_inner().unwrap_or_default();
-    let mut added = 0;
     for ((sid, mtime, dir, path), ex) in todo.iter().zip(done) {
         let Some(ex) = ex else { continue };
         let entries = oc_entries(&ex, dir);

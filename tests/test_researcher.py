@@ -4,6 +4,7 @@ import io
 import json
 import os
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -191,6 +192,31 @@ class UsageTests(Env):
 
     def test_usage_with_no_log(self):
         self.assertIn("no usage recorded yet", self.run_main("--usage")[1])
+
+    def test_damaged_numbers_count_as_zero(self):
+        t = R.usage_summary([{"v": 2, "raw": None, "chars": "x", "tk": True, "fmt_chars": {"pdf": "y"}},
+                             {"v": 2, "docs": 1, "raw": 10, "chars": 4}])
+        self.assertEqual((t["raw"], t["chars"], t["squeezed"], t["tokens_converted"]), (10, 4, 6, 0))
+
+    def test_wrong_config_types_are_config_errors(self):
+        base = read(self.cfg)
+        cases = (
+            ('sets = "x"\n' + base.replace("[sets.rust]", "[x.rust]").replace("[sets.app]", "[x.app]"), ["--list"], 6),
+            (base.replace('[aliases]\nrs = "rust"\n', "aliases = 3\n"), ["--list"], 0),
+            (base + '[profiles.p]\nroot = 5\n', ["--profile", "p"], 6),
+            (base + '[profiles.p]\ncode = "src/*.rs"\n', ["--profile", "p"], 6),
+        )
+        for text, args, want in cases:
+            write(self.cfg, text)
+            code, out = self.run_main(*args)
+            self.assertEqual(code, want, out)
+            if want == 6:
+                self.assertIn("CONFIG ERROR", out)
+
+    def test_idle_minutes_falls_back_to_ten(self):
+        for v, want in (('"10 min"', 10.0), ('" 5 "', 5.0), ("true", 10.0), ("2.5", 2.5)):
+            st = R.sessions_settings(R.tomllib.loads(f"[sessions]\nenabled = true\nidle_minutes = {v}\n"))
+            self.assertEqual(st["idle_minutes"], want, v)
 
     def test_summary_math(self):
         recs = [{"v": 1, "docs": 2, "raw": 4600, "chars": 2300, "lib_chars": 23000, "tk": 2300},
@@ -1104,6 +1130,26 @@ class WindowLogicTests(unittest.TestCase):
             self.assertEqual(R.band(now, self.at(t)), want, t)
         # 23:30 UTC on the 18th is already the 19th at +01:00
         self.assertEqual(R.band(now, self.at("2026-11-18T23:30:00+00:00").astimezone(now.tzinfo)), "Today")
+
+    @unittest.skipUnless(hasattr(time, "tzset"), "needs time.tzset")
+    def test_bands_follow_a_clock_change(self):
+        old = os.environ.get("TZ")
+        os.environ["TZ"] = "Europe/Brussels"
+        time.tzset()
+        try:
+            local = lambda s: self.at(s).astimezone()
+            # the day after summer time starts (29 Mar 2026): 28 Mar 23:30 is two days back
+            self.assertEqual(R.band(local("2026-03-30T10:00:00+02:00"), local("2026-03-28T23:30:00+01:00")),
+                             "Earlier this week")
+            # the day after winter time starts (25 Oct 2026): 25 Oct 00:30 is yesterday
+            self.assertEqual(R.band(local("2026-10-26T10:00:00+01:00"), local("2026-10-25T00:30:00+02:00")),
+                             "Yesterday")
+        finally:
+            if old is None:
+                os.environ.pop("TZ")
+            else:
+                os.environ["TZ"] = old
+            time.tzset()
 
     def test_chips_are_24h_7d_30d(self):
         now = self.at("2026-11-19T10:00:00+01:00")

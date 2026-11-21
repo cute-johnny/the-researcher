@@ -1167,6 +1167,15 @@ fn profile_env() -> (Sess, PathBuf) {
     (s, presets)
 }
 
+#[test]
+fn a_profile_root_that_is_not_text_is_a_config_error() {
+    let e = Env::new();
+    e.append_cfg("\n[profiles.p]\nroot = 5\n");
+    let (code, out) = e.run(&["--profile", "p"]);
+    assert_eq!(code, 6, "{out}");
+    assert!(out.contains("CONFIG ERROR: [profiles.p] root must be a string"), "{out}");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_named_pipe_in_the_code_root_is_skipped() {
@@ -1595,6 +1604,21 @@ fn opencode_env(on: bool, ages: [u64; 2]) -> (Sess, PathBuf) {
         s.e.append_cfg(&format!("opencode = true\nopencode_cmd = \"{}\"\n", script.display()));
     }
     (s, fake)
+}
+
+#[cfg(unix)]
+#[test]
+fn an_empty_opencode_chat_is_exported_once() {
+    let (s, fake) = opencode_env(true, [3600, 7200]);
+    write(
+        &fake.join(format!("export-{OC2}.json")),
+        &serde_json::json!({"info": {"id": OC2}, "messages": []}).to_string(),
+    );
+    s.e.run(&["--sessions"]);
+    s.e.run(&["--sessions"]);
+    let calls = read(&fake.join("calls.log"));
+    assert_eq!(calls.matches(&format!("export {OC2}")).count(), 1, "{calls}");
+    assert_eq!(calls.matches(&format!("export {OC1}")).count(), 1, "{calls}");
 }
 
 #[cfg(unix)]
