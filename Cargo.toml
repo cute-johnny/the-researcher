@@ -1,6 +1,6 @@
 [package]
 name = "the-researcher"
-version = "0.6.3"
+version = "0.6.4"
 edition = "2024"
 license = "MIT"
 description = "A research loader for Claude: load saved research into a Claude Code session"
