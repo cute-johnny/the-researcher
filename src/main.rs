@@ -989,7 +989,14 @@ fn load_profile(args: &Args, name: &str, cfg_path: &str, state_path: &str) -> i3
         }
     };
     let pcfg = cfg.get("profiles").and_then(|p| p.get(&name)).and_then(toml::Value::as_table);
-    let root = pcfg.and_then(|p| p.get("root")).and_then(toml::Value::as_str).map(util::user_path);
+    let root = match pcfg.and_then(|p| p.get("root")) {
+        None => None,
+        Some(toml::Value::String(r)) => Some(util::user_path(r)),
+        Some(_) => {
+            println!("CONFIG ERROR: [profiles.{name}] root must be a string");
+            return 6;
+        }
+    };
     let globs = match library::str_list(pcfg.and_then(|p| p.get("code")), &format!("[profiles.{name}] code")) {
         Ok(g) if g.is_empty() => vec!["*".to_string()],
         Ok(g) => g,

@@ -363,6 +363,8 @@ def build_sets(cfg, catalog, conf, names):
     kinds: 'set' (from config), 'all' (whole library) or 'custom' (user ticks from the library).
     """
     defs = cfg.get("sets", {})
+    if not isinstance(defs, dict):
+        raise ConfigError("[sets] must be a table")
     sets = {n: expand(n, defs, catalog) for n in defs}
     kinds = {n: "set" for n in defs}
     sets["all"], kinds["all"] = list(catalog), "all"
@@ -601,10 +603,17 @@ def chip_holds(chip, now, t):
 def band(now, t):
     """The heading a time sits under (aware datetimes): Today and Yesterday follow local
     midnight, the rest the age (7 and 30 days). A time in the future counts as Today."""
-    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    day = now.date()
+    if now.astimezone().utcoffset() == now.utcoffset():
+        # local time: each midnight with its own offset, so a clock change cannot shift a day
+        midnight, yesterday = (datetime.datetime.combine(d, datetime.time.min).astimezone()
+                               for d in (day, day - datetime.timedelta(days=1)))
+    else:  # a fixed offset that is not this machine's: no clock changes to follow
+        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        yesterday = midnight - datetime.timedelta(days=1)
     if t >= midnight:
         return "Today"
-    if t >= midnight - datetime.timedelta(days=1):
+    if t >= yesterday:
         return "Yesterday"
     age = now - t
     if age < datetime.timedelta(days=7):
@@ -1518,22 +1527,26 @@ def read_usage():
 
 def usage_summary(recs):
     """Totals over records. Characters are summed; tokens use each record's own ratio."""
-    def tok(chars, rec):
-        return chars / (rec.get("tk") or CHARS_PER_K) * 1000
+    def num(d, k):  # a damaged line counts as 0, as in the Rust version
+        v = d.get(k)
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else 0
 
-    tot = {k: sum(r.get(k, 0) for r in recs) for k in ("docs", "src_bytes", "raw", "chars")}
+    def tok(chars, rec):
+        return chars / (num(rec, "tk") or CHARS_PER_K) * 1000
+
+    tot = {k: sum(num(r, k) for r in recs) for k in ("docs", "src_bytes", "raw", "chars")}
     tot["squeezed"] = tot["raw"] - tot["chars"]
-    tot["unticked"] = sum(max(0, r.get("lib_chars", 0) - r.get("chars", 0)) for r in recs)
-    tot["tokens"] = sum(tok(r.get("chars", 0), r) for r in recs)
-    tot["tokens_squeezed"] = sum(tok(r.get("raw", 0) - r.get("chars", 0), r) for r in recs)
-    tot["tokens_unticked"] = sum(tok(max(0, r.get("lib_chars", 0) - r.get("chars", 0)), r)
+    tot["unticked"] = sum(max(0, num(r, "lib_chars") - num(r, "chars")) for r in recs)
+    tot["tokens"] = sum(tok(num(r, "chars"), r) for r in recs)
+    tot["tokens_squeezed"] = sum(tok(num(r, "raw") - num(r, "chars"), r) for r in recs)
+    tot["tokens_unticked"] = sum(tok(max(0, num(r, "lib_chars") - num(r, "chars")), r)
                                  for r in recs)
     tot["loads"] = len(recs)
     # reading text instead of the HTML/PDF originals (records that say their formats only)
     with_formats = [r for r in recs if isinstance(r.get("fmt_chars"), dict)]
     tot["loads_with_formats"] = len(with_formats)
     tot["tokens_converted"] = sum(
-        tok(sum(per * r["fmt_chars"].get(k, 0) for k, per in SAVED_PER_CHAR.items()), r)
+        tok(sum(per * num(r["fmt_chars"], k) for k, per in SAVED_PER_CHAR.items()), r)
         for r in with_formats)
     return tot
 
@@ -1774,6 +1787,11 @@ def sessions_settings(cfg):
             out[k] = sec[k]
     out["projects_dir"] = os.path.abspath(os.path.expanduser(str(out["projects_dir"])))
     out["opencode"] = bool(out["opencode"])
+    idle = out["idle_minutes"]
+    try:  # like the Rust version: a number or a numeric string, else the default
+        out["idle_minutes"] = 10.0 if isinstance(idle, bool) else float(idle.strip() if isinstance(idle, str) else idle)
+    except (TypeError, ValueError):
+        out["idle_minutes"] = 10.0
     cmd = out["opencode_cmd"]
     out["opencode_cmd"] = os.path.expanduser(cmd.strip()) if isinstance(cmd, str) and cmd.strip() else "opencode"
     return out
@@ -1997,7 +2015,7 @@ def scan_opencode(reg, settings, now, idle, reg_path, in_opencode, live_out=None
     if live_out is not None and live:
         live_out.append(live)  # an earlier scan from Claude Code may have registered it
     cache = os.path.join(os.path.dirname(reg_path), "sessions-opencode")
-    todo = []
+    todo, added = [], 0
     for v in listing:
         sid = v.get("id") if isinstance(v, dict) else None
         if not isinstance(sid, str) or not OC_ID_RE.fullmatch(sid):
@@ -2007,6 +2025,13 @@ def scan_opencode(reg, settings, now, idle, reg_path, in_opencode, live_out=None
             continue
         path = os.path.join(cache, f"{sid}.jsonl")
         if up_to_date(reg, sid, path, mtime) and os.path.isfile(path):
+            continue
+        try:
+            fresh = os.path.getmtime(path) >= mtime
+        except OSError:
+            fresh = False
+        if fresh:  # exported after its last change (an empty chat never gets a record): read the copy
+            added += register(reg, sid, path, mtime, "opencode", read_transcript(path), source="opencode")
             continue
         todo.append((sid, mtime, v.get("directory") or "", path))
 
@@ -2018,7 +2043,6 @@ def scan_opencode(reg, settings, now, idle, reg_path, in_opencode, live_out=None
     # opencode takes about two seconds per export: four at a time
     with ThreadPoolExecutor(max_workers=4) as pool:
         exports = list(pool.map(export, todo))
-    added = 0
     for (sid, mtime, directory, path), ex in zip(todo, exports):
         if ex is None:
             continue
@@ -2570,7 +2594,7 @@ def research_prep(args, cfg_path, state_path, secondary=False):
                 saved = conf[n].get("selected") if isinstance(conf.get(n), dict) else None
                 sel = f", saved default {len(saved)}" if saved is not None else ""
                 print(f"{n:20} {len(docs):>4} docs  ({kinds[n]}{sel})")
-        if cfg.get("aliases"):
+        if isinstance(cfg.get("aliases"), dict) and cfg["aliases"]:
             print("aliases: " + ", ".join(f"{a}={b}" for a, b in cfg["aliases"].items()))
         return 0
 
@@ -2852,9 +2876,18 @@ def load_profile(args, name, cfg_path, state_path):
     except ConfigError as e:
         print(f"CONFIG ERROR: {e}")
         return 6
-    pcfg = (cfg.get("profiles") or {}).get(name) or {}
-    root = os.path.abspath(os.path.expanduser(pcfg["root"])) if pcfg.get("root") else None
-    globs = pcfg.get("code") or ["*"]
+    profiles = cfg.get("profiles")
+    pcfg = profiles.get(name) if isinstance(profiles, dict) else None
+    pcfg = pcfg if isinstance(pcfg, dict) else {}
+    root = pcfg.get("root")
+    try:
+        if root is not None and not isinstance(root, str):
+            raise ConfigError(f"[profiles.{name}] root must be a string")
+        globs = str_list(pcfg.get("code"), f"[profiles.{name}] code") or ["*"]
+    except ConfigError as e:
+        print(f"CONFIG ERROR: {e}")
+        return 6
+    root = os.path.abspath(os.path.expanduser(root)) if root else None
     if root and not os.path.isdir(root):
         print(f"NO ROOT: [profiles.{name}] root = {root} is not a folder; nothing loaded")
         return 6
