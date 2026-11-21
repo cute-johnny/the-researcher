@@ -1,6 +1,6 @@
 # The Researcher: user manual
 
-Version 0.6.3. This manual is for using the program day to day. The [README](../README.md) has the measurements, the install steps for opencode and the reasons behind the design.
+Version 0.6.4. This manual is for using the program day to day. The [README](../README.md) has the measurements, the install steps for opencode and the reasons behind the design.
 
 **Contents**
 
