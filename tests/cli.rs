@@ -900,6 +900,29 @@ fn lists_closed_sessions_with_full_id() {
 }
 
 #[test]
+fn moved_chats_are_found_in_extra_dirs() {
+    let s = sessions_env();
+    s.e.run(&["--sessions"]);
+    s.e.run(&["--rename", SID1, "popup crash"]);
+    // /clear moved SID1 to <cache>/<date>_<sid>/projects/<proj>/, SID4 sits in a plain project folder
+    let cache = s.e.tmp.join("cache dir");
+    let moved = cache.join(format!("2026-11-24_{SID1}")).join("projects").join("-work-app");
+    fs::create_dir_all(&moved).unwrap();
+    fs::rename(s.proj.join("-work-app").join(format!("{SID1}.jsonl")), moved.join(format!("{SID1}.jsonl"))).unwrap();
+    jl(&cache.join("-work-old").join(format!("{SID4}.jsonl")), &[user("Old archived chat")], 3600);
+    // a stale copy of SID2 in the cache: the live one in projects_dir wins
+    jl(&cache.join("-work-app").join(format!("{SID2}.jsonl")), &[user("stale copy")], 3600);
+    s.e.append_cfg(&format!("extra_dirs = [\"{}\"]\n", cache.display()));
+    let (code, out) = s.e.run(&["--sessions"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("popup crash"), "{out}"); // the name followed the chat
+    assert!(out.contains("Old archived chat"), "{out}");
+    assert!(out.contains("Nice title") && !out.contains("stale copy"), "{out}");
+    let reg: Value = serde_json::from_str(&fs::read_to_string(&s.reg).unwrap()).unwrap();
+    assert!(reg["sessions"][SID1]["file"].as_str().unwrap().contains("cache dir"));
+}
+
+#[test]
 fn rename_sticks_and_keeps_the_id() {
     let s = sessions_env();
     s.e.run(&["--sessions"]);

@@ -1773,7 +1773,7 @@ SESSION_ID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-
 OC_ID_RE = re.compile(r"ses_[A-Za-z0-9]+")
 NAME_MAX = 80
 SESSION_LOAD_MAX = 200000  # chars; a longer session keeps its start and its end
-SESSION_DEFAULTS = {"idle_minutes": 10, "projects_dir": "~/.claude/projects", "opencode": False,
+SESSION_DEFAULTS = {"idle_minutes": 10, "projects_dir": "~/.claude/projects", "extra_dirs": [], "opencode": False,
                     "opencode_cmd": "opencode"}
 
 
@@ -1786,6 +1786,10 @@ def sessions_settings(cfg):
         if k in sec:
             out[k] = sec[k]
     out["projects_dir"] = os.path.abspath(os.path.expanduser(str(out["projects_dir"])))
+    extra = out["extra_dirs"]
+    extra = [extra] if isinstance(extra, str) else extra if isinstance(extra, list) else []
+    out["extra_dirs"] = [os.path.abspath(os.path.expanduser(x.strip()))
+                         for x in extra if isinstance(x, str) and x.strip()]
     out["opencode"] = bool(out["opencode"])
     idle = out["idle_minutes"]
     try:  # like the Rust version: a number or a numeric string, else the default
@@ -1907,6 +1911,20 @@ def up_to_date(reg, sid, path, mtime):
                 and "first" in rec and "chars" in rec)
 
 
+def project_bases(settings):
+    """The folders that hold project folders: projects_dir, then each of extra_dirs itself and
+    every <extra>/<name>/projects in it (the layout of chats moved away on /clear)."""
+    out = [settings["projects_dir"]]
+    for x in settings.get("extra_dirs", []):
+        out.append(x)
+        try:
+            subs = sorted(os.listdir(x), reverse=True)  # newest dated folder first
+        except OSError:
+            continue
+        out += [os.path.join(x, d, "projects") for d in subs if os.path.isdir(os.path.join(x, d, "projects"))]
+    return out
+
+
 def scan_sessions(reg, settings, now=None, idle=None, skip="", reg_path="", in_opencode=False, live_out=None):
     """Add sessions untouched for `idle` seconds (default: idle_minutes) to the registry and
     refresh the changed ones (never `skip`, the session that runs this). Returns the number added.
@@ -1916,31 +1934,33 @@ def scan_sessions(reg, settings, now=None, idle=None, skip="", reg_path="", in_o
     now = time.time() if now is None else now
     idle = float(settings["idle_minutes"]) * 60 if idle is None else idle
     added = 0
-    base = settings["projects_dir"]
-    try:
-        projects = sorted(os.listdir(base))
-    except OSError:
-        projects = []
-    for proj in projects:
-        pdir = os.path.join(base, proj)
+    seen = set()
+    for base in project_bases(settings):
         try:
-            files = os.listdir(pdir)
+            projects = sorted(os.listdir(base))
         except OSError:
             continue
-        for fn in files:
-            sid = fn[:-6]
-            if not fn.endswith(".jsonl") or not SESSION_ID_RE.fullmatch(sid) or sid == skip:
-                continue
-            path = os.path.join(pdir, fn)
+        for proj in projects:
+            pdir = os.path.join(base, proj)
             try:
-                mtime = os.path.getmtime(path)
+                files = sorted(os.listdir(pdir))
             except OSError:
                 continue
-            if now - mtime < idle:
-                continue  # probably still open
-            if up_to_date(reg, sid, path, mtime):
-                continue
-            added += register(reg, sid, path, mtime, proj, read_transcript(path))
+            for fn in files:
+                sid = fn[:-6]
+                if not fn.endswith(".jsonl") or not SESSION_ID_RE.fullmatch(sid) or sid == skip or sid in seen:
+                    continue  # the first copy wins: projects_dir before extra_dirs
+                seen.add(sid)
+                path = os.path.join(pdir, fn)
+                try:
+                    mtime = os.path.getmtime(path)
+                except OSError:
+                    continue
+                if now - mtime < idle:
+                    continue  # probably still open
+                if up_to_date(reg, sid, path, mtime):
+                    continue
+                added += register(reg, sid, path, mtime, proj, read_transcript(path))
     if settings["opencode"]:
         added += scan_opencode(reg, settings, now, idle, reg_path, in_opencode, live_out)
     return added

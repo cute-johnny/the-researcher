@@ -31,6 +31,9 @@ const SESSION_LOAD_MAX: usize = 200_000;
 pub struct Settings {
     idle_minutes: f64,
     projects_dir: String,
+    /// More folders with moved chats (`extra_dirs`): each holds project folders, or folders that
+    /// hold a `projects` folder (one per moved session).
+    extra_dirs: Vec<String>,
     /// Also list opencode's chats (opt-in, asks the `opencode` program).
     opencode: bool,
     opencode_cmd: String,
@@ -53,12 +56,22 @@ pub fn settings(cfg: &Config) -> Option<Settings> {
         Some(other) => other.to_string(),
         None => "~/.claude/projects".into(),
     };
+    let extra_dirs = match sec.get("extra_dirs") {
+        Some(toml::Value::String(s)) if !s.trim().is_empty() => vec![util::user_path(s.trim())],
+        Some(toml::Value::Array(a)) => a
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| util::user_path(s.trim()))
+            .collect(),
+        _ => Vec::new(),
+    };
     let opencode = util::truthy_toml(sec.get("opencode"));
     let opencode_cmd = match sec.get("opencode_cmd") {
         Some(toml::Value::String(c)) if !c.trim().is_empty() => util::expanduser(c.trim()),
         _ => "opencode".into(),
     };
-    Some(Settings { idle_minutes, projects_dir: util::user_path(&dir), opencode, opencode_cmd })
+    Some(Settings { idle_minutes, projects_dir: util::user_path(&dir), extra_dirs, opencode, opencode_cmd })
 }
 
 fn clean_name(text: &str) -> String {
@@ -237,6 +250,26 @@ fn register(
     added
 }
 
+/// The folders that hold project folders: `projects_dir`, then each of `extra_dirs` itself and
+/// every `<extra>/<name>/projects` in it (the layout of chats moved away on /clear).
+fn project_bases(st: &Settings) -> Vec<String> {
+    let mut out = vec![st.projects_dir.clone()];
+    for x in &st.extra_dirs {
+        out.push(x.clone());
+        let Ok(rd) = fs::read_dir(x) else { continue };
+        let mut subs: Vec<String> = rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        subs.sort();
+        subs.reverse(); // newest dated folder first, so its copy of a chat wins
+        for d in subs {
+            let p = util::join(&util::join(x, &d), "projects");
+            if fs::metadata(&p).is_ok_and(|m| m.is_dir()) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
 /// True when the registry already holds this version of the session's transcript.
 fn up_to_date(reg: &Map<String, Value>, sid: &str, path: &str, mtime: f64) -> bool {
     sessions(reg).get(sid).and_then(Value::as_object).is_some_and(|r| {
@@ -262,18 +295,20 @@ fn scan_sessions(
 ) -> usize {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
     let mut added = 0;
-    if let Ok(rd) = fs::read_dir(&st.projects_dir) {
+    let mut seen = std::collections::HashSet::new();
+    for base in project_bases(st) {
+        let Ok(rd) = fs::read_dir(&base) else { continue };
         let mut projects: Vec<String> = rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         projects.sort();
         for proj in projects {
-            let pdir = util::join(&st.projects_dir, &proj);
+            let pdir = util::join(&base, &proj);
             let Ok(rd) = fs::read_dir(&pdir) else { continue };
             let mut files: Vec<String> = rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
             files.sort();
             for f in files {
                 let Some(sid) = f.strip_suffix(".jsonl") else { continue };
-                if !SESSION_ID_RE.is_match(sid) || sid == skip {
-                    continue;
+                if !SESSION_ID_RE.is_match(sid) || sid == skip || !seen.insert(sid.to_string()) {
+                    continue; // the first copy wins: projects_dir before extra_dirs
                 }
                 let path = util::join(&pdir, &f);
                 let Ok(meta) = fs::metadata(&path) else { continue };

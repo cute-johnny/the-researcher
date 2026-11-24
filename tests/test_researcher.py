@@ -813,6 +813,26 @@ class SessionTests(SessionEnv):
         self.assertNotIn("agent-abc", out)
         self.assertIn("2 closed sessions", out)
 
+    def test_moved_chats_are_found_in_extra_dirs(self):
+        self.run_main("--sessions")
+        self.run_main("--rename", SID1, "popup crash")
+        cache = os.path.join(self.tmp.name, "cache dir")
+        moved = os.path.join(cache, "2026-11-24_" + SID1, "projects", "-work-app")
+        os.makedirs(moved)
+        os.rename(os.path.join(self.proj, "-work-app", SID1 + ".jsonl"), os.path.join(moved, SID1 + ".jsonl"))
+        jl(os.path.join(cache, "-work-old", SID4 + ".jsonl"), [user("Old archived chat")])
+        jl(os.path.join(cache, "-work-app", SID2 + ".jsonl"), [user("stale copy")])
+        with open(self.cfg, "a", encoding="utf-8") as f:
+            f.write(f'extra_dirs = ["{cache}"]\n')
+        code, out = self.run_main("--sessions")
+        self.assertEqual(code, 0)
+        self.assertIn("popup crash", out)  # the name followed the chat
+        self.assertIn("Old archived chat", out)
+        self.assertIn("Nice title", out)
+        self.assertNotIn("stale copy", out)  # the live copy wins
+        with open(self.reg, encoding="utf-8") as f:
+            self.assertIn("cache dir", json.load(f)["sessions"][SID1]["file"])
+
     def test_rename_sticks_and_keeps_the_id(self):
         self.run_main("--sessions")
         code, out = self.run_main("--rename", SID1[:8], "popup crash")

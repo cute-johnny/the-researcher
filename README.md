@@ -222,6 +222,7 @@ Off by default. Switch it on in `config.toml`:
 enabled = true
 # idle_minutes = 10                  # a session untouched this long counts as closed
 # projects_dir = "~/.claude/projects"
+# extra_dirs = ["~/old-chats"]       # more folders with moved chats (see below)
 # opencode = true                    # also list opencode's chats (asks the opencode program)
 # opencode_cmd = "opencode"          # the program to ask, when it is not on PATH
 ```
@@ -232,7 +233,9 @@ Name and id are stored together, keyed by the full id, and every command prints 
 
 **opencode chats.** opencode keeps its chats in its own database, so with `opencode = true` the researcher asks the program itself (`opencode session list`, `opencode export ID`) and keeps one plain transcript per chat in `sessions-opencode/` next to `sessions.json`. Each chat is exported once and again only after it changed; the first run takes a few seconds per chat (four at a time). They show up in `--sessions`, `--context` and the other commands like any chat, with opencode's own title as the name (the first prompt when it has none) and the folder opencode ran in. `--resume ID` prints `cd <folder> && opencode -s <id>`. Only top-level chats are listed, not the helper sessions a sub-agent opens. Inside opencode (it sets `OPENCODE=1`) the chat you type `/load-context` in is left out. If the program cannot be run, the output says `OPENCODE SKIPPED (...)` and Claude Code's chats still load. Set `opencode_cmd` to the full path when opencode is not on `PATH` (a sandbox, say); the program must see the same opencode data as your chats.
 
-The registry only reads `~/.claude/projects` (and asks opencode for its chats); it never changes your transcripts. Sessions are loaded as reference material, the same caution as the documents below applies.
+**Moved chats.** If something moves closed chats out of `~/.claude/projects` (a cleanup on `/clear`, an archive drive), list those folders in `extra_dirs`. Each one may hold project folders like `~/.claude/projects` does (`<folder>/<project>/<id>.jsonl`), or one folder per moved session that holds a `projects` folder (`<folder>/<anything>/projects/<project>/<id>.jsonl`); both are read. A chat found in more than one place is taken from `projects_dir` first, then from the newest-named moved folder. A chat that moved keeps its name and presets: the registry follows it to its new place on the next scan.
+
+The registry only reads `~/.claude/projects` (plus `extra_dirs`) (and asks opencode for its chats); it never changes your transcripts. Sessions are loaded as reference material, the same caution as the documents below applies.
 
 ## Earlier chats as context (`/load-context`)
 
