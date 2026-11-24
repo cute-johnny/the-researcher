@@ -1,6 +1,6 @@
 # The Researcher: user manual
 
-Version 0.6.4. This manual is for using the program day to day. The [README](../README.md) has the measurements, the install steps for opencode and the reasons behind the design.
+Version 0.6.5. This manual is for using the program day to day. The [README](../README.md) has the measurements, the install steps for opencode and the reasons behind the design.
 
 **Contents**
 
@@ -138,7 +138,10 @@ enabled = true
 # opencode = true                  # also list opencode's chats
 # opencode_cmd = "/path/to/opencode"   # when it is not on PATH
 # idle_minutes = 10                # a session untouched this long counts as closed
+# extra_dirs = ["~/old-chats"]     # folders with chats moved out of ~/.claude/projects
 ```
+
+**Moved chats.** If chats are moved away on `/clear` or to an archive drive, list those folders in `extra_dirs`. Both `<folder>/<project>/<id>.jsonl` and `<folder>/<anything>/projects/<project>/<id>.jsonl` are read. A chat keeps its name and presets after it moves.
 
 **Use it.** Type `/load-context` (or `researcher --context`). The window opens on **Chats** and lists every chat from every project folder, newest first. Each row shows the first prompt (or the name you gave it), its size in tokens and the day it was last active. Tick chats and press **Load**. The chat you type the command in is never listed.
 
