@@ -30,7 +30,7 @@ class Env(unittest.TestCase):
     def setUp(self):
         os.environ["RESEARCHER_NO_POPUP"] = "1"  # tests must never open a window
         self.addCleanup(os.environ.pop, "RESEARCHER_NO_POPUP", None)
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.tmp.cleanup)
         self.data = os.path.join(self.tmp.name, "data")  # the usage log must never reach a real home
         os.environ["XDG_DATA_HOME"] = self.data
@@ -53,7 +53,7 @@ class Env(unittest.TestCase):
         write(os.path.join(self.lib, ".hidden", "x.md"), "no")
         write(os.path.join(self.lib, "rust", "notes.png"), "no")
         self.cfg = os.path.join(self.conf_dir, "config.toml")
-        write(self.cfg, f'''library = "{self.lib}"
+        write(self.cfg, f'''library = {json.dumps(self.lib)}
 default_set = "rust"
 [aliases]
 rs = "rust"
@@ -699,7 +699,7 @@ class MainTests(Env):
 
     def test_text_dir_in_config(self):
         elsewhere = os.path.join(self.tmp.name, "mytext")
-        write(self.cfg, f'text_dir = "{elsewhere}"\n' + read(self.cfg))
+        write(self.cfg, f'text_dir = {json.dumps(elsewhere)}\n' + read(self.cfg))
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             R.main(["--config", self.cfg, "--no-popup", "rust"])
@@ -737,7 +737,7 @@ class MainTests(Env):
     def test_empty_library_exits_6(self):
         empty = os.path.join(self.tmp.name, "empty")
         os.makedirs(empty)
-        write(self.cfg, f'library = "{empty}"\n')
+        write(self.cfg, f'library = {json.dumps(empty)}\n')
         code, out = self.run_main("--no-popup", "all")
         self.assertEqual(code, 6, out)
         self.assertIn("EMPTY LIBRARY", out)
@@ -762,7 +762,7 @@ class MainTests(Env):
     def test_init(self):
         os.remove(self.cfg)
         self.assertEqual(R.main(["--config", self.cfg, "--init", self.lib]), 0)
-        self.assertIn(self.lib, read(self.cfg))
+        self.assertIn(json.dumps(self.lib), read(self.cfg))
         self.assertEqual(R.load_config(self.cfg)["library"], self.lib)
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(R.main(["--config", self.cfg, "--init", self.lib]), 1)  # no overwrite
@@ -808,7 +808,7 @@ class SessionEnv(Env):
         self.proj = os.path.join(self.tmp.name, "projects")
         self.reg = os.path.join(self.conf_dir, "sessions.json")
         with open(self.cfg, "a", encoding="utf-8") as f:
-            f.write(f'\n[sessions]\nenabled = true\nprojects_dir = "{self.proj}"\n')
+            f.write(f'\n[sessions]\nenabled = true\nprojects_dir = {json.dumps(self.proj)}\n')
         d = os.path.join(self.proj, "-work-app")
         jl(os.path.join(d, SID1 + ".jsonl"), [
             {"type": "file-history-snapshot"},
@@ -826,7 +826,7 @@ class SessionEnv(Env):
 class SessionTests(SessionEnv):
 
     def test_off_by_default(self):
-        write(self.cfg, f'library = "{self.lib}"\n')
+        write(self.cfg, f'library = {json.dumps(self.lib)}\n')
         code, out = self.run_main("--sessions")
         self.assertEqual(code, 7)
         self.assertIn("SESSIONS OFF", out)
@@ -852,7 +852,7 @@ class SessionTests(SessionEnv):
         jl(os.path.join(cache, "-work-old", SID4 + ".jsonl"), [user("Old archived chat")])
         jl(os.path.join(cache, "-work-app", SID2 + ".jsonl"), [user("stale copy")])
         with open(self.cfg, "a", encoding="utf-8") as f:
-            f.write(f'extra_dirs = ["{cache}"]\n')
+            f.write(f'extra_dirs = [{json.dumps(cache)}]\n')
         code, out = self.run_main("--sessions")
         self.assertEqual(code, 0)
         self.assertIn("popup crash", out)  # the name followed the chat
@@ -907,7 +907,7 @@ class SessionTests(SessionEnv):
             self.assertNotIn(bad, text)
 
     def test_no_library_needed(self):
-        write(self.cfg, f'[sessions]\nenabled = true\nprojects_dir = "{self.proj}"\n')
+        write(self.cfg, f'[sessions]\nenabled = true\nprojects_dir = {json.dumps(self.proj)}\n')
         self.assertEqual(self.run_main("--sessions")[0], 0)
 
 
@@ -928,7 +928,7 @@ class ContextTests(SessionEnv):
         write(self.presets, json.dumps({name: {"selected": selected, "known": []}}))
 
     def test_needs_sessions_on(self):
-        write(self.cfg, f'library = "{self.lib}"\n')
+        write(self.cfg, f'library = {json.dumps(self.lib)}\n')
         code, out = self.run_main("--context")
         self.assertEqual(code, 7)
         self.assertIn("SESSIONS OFF", out)
@@ -1090,7 +1090,7 @@ class ProfileTests(SessionEnv):
         write(os.path.join(self.root, "docs", "notes.md"), "notes")
         write(os.path.join(self.root, "target", "x.rs"), "built")
         with open(self.cfg, "a", encoding="utf-8") as f:
-            f.write(f'\n[profiles.app]\nroot = "{self.root}"\ncode = ["src/*"]\n')
+            f.write(f'\n[profiles.app]\nroot = {json.dumps(self.root)}\ncode = ["src/*"]\n')
         self.profiles = os.path.join(self.conf_dir, "profiles.json")
         write(self.profiles, json.dumps({"app": {"presets": {"gui": {
             "code": ["src/gui/popup.rs"], "chats": [SID2], "research": ["rust/memory-a"]}}}}))
@@ -1300,13 +1300,19 @@ class OpencodeTests(SessionEnv):
         write(os.path.join(d, f"export-{OC2}.json"), json.dumps({
             "info": {"id": OC2, "title": "New session - 2026-11-17T07:11:29.702Z"},
             "messages": [msg("user", "m3", [{"type": "text", "text": "Newest chat, other folder"}])]}))
-        script = os.path.join(d, "opencode")
-        write(script, '#!/bin/sh\nd="$(dirname "$0")"\necho "$*" >> "$d/calls.log"\n'
-                      'case "$1" in\n  session) cat "$d/list.json" ;;\n  export) cat "$d/export-$2.json" ;;\nesac\n')
-        os.chmod(script, 0o755)
+        if os.name == "nt":
+            script = os.path.join(d, "opencode.cmd")
+            write(script, '@echo off\r\nset "d=%~dp0"\r\necho %*>> "%d%calls.log"\r\n'
+                          'if "%1"=="session" type "%d%list.json"\r\n'
+                          'if "%1"=="export" type "%d%export-%2.json"\r\n')
+        else:
+            script = os.path.join(d, "opencode")
+            write(script, '#!/bin/sh\nd="$(dirname "$0")"\necho "$*" >> "$d/calls.log"\n'
+                          'case "$1" in\n  session) cat "$d/list.json" ;;\n  export) cat "$d/export-$2.json" ;;\nesac\n')
+            os.chmod(script, 0o755)
         if on:
             with open(self.cfg, "a", encoding="utf-8") as f:
-                f.write(f'opencode = true\nopencode_cmd = "{script}"\n')
+                f.write(f'opencode = true\nopencode_cmd = {json.dumps(script)}\n')
         return d
 
     def test_off_unless_asked(self):

@@ -115,17 +115,21 @@ struct Args {
     out: Option<String>,
 }
 
-fn dir_or(d: Option<std::path::PathBuf>, fallback: &str) -> String {
-    let base = d.map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| util::expanduser(fallback));
+fn env_or_dir(var: &str, d: Option<std::path::PathBuf>, fallback: &str) -> String {
+    let base = std::env::var(var)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .or_else(|| d.map(|p| p.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| util::expanduser(fallback));
     util::join(&base, APP)
 }
 
 fn config_home() -> String {
-    dir_or(dirs::config_dir(), "~/.config")
+    env_or_dir("XDG_CONFIG_HOME", dirs::config_dir(), "~/.config")
 }
 
 fn cache_home() -> String {
-    dir_or(dirs::cache_dir(), "~/.cache")
+    env_or_dir("XDG_CACHE_HOME", dirs::cache_dir(), "~/.cache")
 }
 
 /// The researcher's own folder: a plain-text copy of every library document.

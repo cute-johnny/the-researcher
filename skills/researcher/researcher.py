@@ -77,19 +77,22 @@ class ConfigError(Exception):
 # ---------------------------------------------------------------- paths and config
 
 def config_home():
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    base = (os.environ.get("XDG_CONFIG_HOME")
+            or (os.environ.get("APPDATA") if os.name == "nt" else None)
+            or os.path.expanduser("~/.config"))
     return os.path.join(base, APP)
 
 
 def cache_home():
-    base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    base = (os.environ.get("XDG_CACHE_HOME")
+            or (os.environ.get("LOCALAPPDATA") if os.name == "nt" else None)
+            or os.path.expanduser("~/.cache"))
     return os.path.join(base, APP)
 
 
 def text_home():
     """The researcher's own folder: a plain-text copy of every library document."""
-    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
-    return os.path.join(base, APP, "text")
+    return os.path.join(data_home(), "text")
 
 
 def load_config(path):
@@ -457,7 +460,7 @@ class Texts:
         os.makedirs(self.store, exist_ok=True)
         fn = free_store_name(d, self.index)
         tmp = os.path.join(self.store, f"{fn}.{os.getpid()}.tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
             f.write(f"SOURCE: {self.paths[d]}\n\n{text}\n")
         os.replace(tmp, os.path.join(self.store, fn))
         self.index[d] = {"file": fn, "src": self.paths[d], "size": st.st_size,
@@ -1374,7 +1377,9 @@ FORMS = USAGE_KINDS + ("chat",)  # what a record counts per format
 
 
 def data_home():
-    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    base = (os.environ.get("XDG_DATA_HOME")
+            or (os.environ.get("APPDATA") if os.name == "nt" else None)
+            or os.path.expanduser("~/.local/share"))
     return os.path.join(base, APP)
 
 
@@ -1704,7 +1709,12 @@ def usage_send(url, recs):
 def send_in_background(cfg_path):
     """Start --usage-send on its own and return at once: a load never waits on the network,
     and the sender outlives the load (its own session on POSIX)."""
-    kw = {"start_new_session": True} if os.name == "posix" else {}
+    if os.name == "posix":
+        kw = {"start_new_session": True}
+    elif os.name == "nt":
+        kw = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW}
+    else:
+        kw = {}
     try:
         subprocess.Popen([sys.executable, "-I", os.path.abspath(__file__), "--usage-send",
                           "--config", os.path.abspath(cfg_path)], stdin=subprocess.DEVNULL,

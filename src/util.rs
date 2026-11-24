@@ -308,8 +308,16 @@ mod tests {
 
     #[test]
     fn abspath_normalises() {
-        assert_eq!(abspath("/a/./b//c/../d"), "/a/b/d");
-        assert_eq!(abspath("/.."), "/");
+        #[cfg(unix)]
+        {
+            assert_eq!(abspath("/a/./b//c/../d"), "/a/b/d");
+            assert_eq!(abspath("/.."), "/");
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(abspath(r"C:\a\.\b\\c\..\d"), r"C:\a\b\d");
+            assert_eq!(abspath(r"C:\.."), r"C:\");
+        }
     }
 
     #[test]

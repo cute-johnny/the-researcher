@@ -26,6 +26,18 @@ fn read(path: &Path) -> String {
     fs::read_to_string(path).unwrap()
 }
 
+/// A filesystem path encoded as a TOML basic string (escapes Windows backslashes).
+fn toml_path(path: &Path) -> String {
+    serde_json::to_string(&path.display().to_string()).unwrap()
+}
+
+/// A working Python 3 interpreter on this platform (`python3` on Unix, `python` on Windows).
+fn python_cmd() -> Option<&'static str> {
+    ["python3", "python"]
+        .into_iter()
+        .find(|bin| Command::new(bin).arg("--version").output().is_ok_and(|o| o.status.success()))
+}
+
 struct Env {
     tmp: PathBuf,
     lib: PathBuf,
@@ -63,10 +75,10 @@ impl Env {
         write(
             &cfg,
             &format!(
-                "library = \"{}\"\ndefault_set = \"rust\"\n[aliases]\nrs = \"rust\"\n[sets.rust]\n\
+                "library = {}\ndefault_set = \"rust\"\n[aliases]\nrs = \"rust\"\n[sets.rust]\n\
                  docs = [\"rust/linux\", \"rust/memory-*\"]\n[sets.app]\ninclude = [\"rust\"]\n\
                  docs = [\"app/roadmap\", \"app/ghost\"]\n",
-                lib.display()
+                toml_path(&lib)
             ),
         );
         Env { out: tmp.join("out"), data: tmp.join("data"), lib, conf_dir, cfg, tmp }
@@ -482,7 +494,8 @@ fn html_preferred_over_pdf() {
     write(&e.lib.join("web/seo.pdf"), "%PDF");
     e.run(&["--sync"]);
     assert!(
-        read(&e.out.join("web - seo.txt")).starts_with(&format!("SOURCE: {}", e.lib.join("web/seo.html").display()))
+        read(&e.out.join("web - seo.txt"))
+            .starts_with(&format!("SOURCE: {}", e.lib.join("web").join("seo.html").display()))
     );
 }
 
@@ -679,7 +692,7 @@ fn copy_remade_when_converter_version_changes() {
 fn text_dir_in_config() {
     let e = Env::new();
     let elsewhere = e.tmp.join("mytext");
-    write(&e.cfg, &format!("text_dir = \"{}\"\n{}", elsewhere.display(), read(&e.cfg)));
+    write(&e.cfg, &format!("text_dir = {}\n{}", toml_path(&elsewhere), read(&e.cfg)));
     let o = e.cmd().arg("--config").arg(&e.cfg).args(["--no-popup", "rust"]).output().unwrap();
     assert!(o.status.success());
     assert!(elsewhere.join("rust - linux.txt").is_file());
@@ -877,7 +890,7 @@ struct Sess {
 fn sessions_env() -> Sess {
     let e = Env::new();
     let proj = e.tmp.join("projects");
-    e.append_cfg(&format!("\n[sessions]\nenabled = true\nprojects_dir = \"{}\"\n", proj.display()));
+    e.append_cfg(&format!("\n[sessions]\nenabled = true\nprojects_dir = {}\n", toml_path(&proj)));
     let d = proj.join("-work-app");
     let mut meta = user("<system-reminder>ignore me</system-reminder>");
     meta["isMeta"] = Value::Bool(true);
@@ -907,7 +920,7 @@ fn sessions_env() -> Sess {
 #[test]
 fn sessions_off_by_default() {
     let s = sessions_env();
-    write(&s.e.cfg, &format!("library = \"{}\"\n", s.e.lib.display()));
+    write(&s.e.cfg, &format!("library = {}\n", toml_path(&s.e.lib)));
     let (code, out) = s.e.run(&["--sessions"]);
     assert_eq!(code, 7);
     assert!(out.contains("SESSIONS OFF"));
@@ -940,7 +953,7 @@ fn moved_chats_are_found_in_extra_dirs() {
     jl(&cache.join("-work-old").join(format!("{SID4}.jsonl")), &[user("Old archived chat")], 3600);
     // a stale copy of SID2 in the cache: the live one in projects_dir wins
     jl(&cache.join("-work-app").join(format!("{SID2}.jsonl")), &[user("stale copy")], 3600);
-    s.e.append_cfg(&format!("extra_dirs = [\"{}\"]\n", cache.display()));
+    s.e.append_cfg(&format!("extra_dirs = [{}]\n", toml_path(&cache)));
     let (code, out) = s.e.run(&["--sessions"]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("popup crash"), "{out}"); // the name followed the chat
@@ -1016,7 +1029,7 @@ fn session_load_writes_conversation_without_tool_traffic() {
 #[test]
 fn sessions_need_no_library() {
     let s = sessions_env();
-    write(&s.e.cfg, &format!("[sessions]\nenabled = true\nprojects_dir = \"{}\"\n", s.proj.display()));
+    write(&s.e.cfg, &format!("[sessions]\nenabled = true\nprojects_dir = {}\n", toml_path(&s.proj)));
     assert_eq!(s.e.run(&["--sessions"]).0, 0);
 }
 
@@ -1046,7 +1059,7 @@ fn known(path: &Path, name: &str) -> Vec<String> {
 #[test]
 fn context_needs_sessions_on() {
     let (s, _) = context_env();
-    write(&s.e.cfg, &format!("library = \"{}\"\n", s.e.lib.display()));
+    write(&s.e.cfg, &format!("library = {}\n", toml_path(&s.e.lib)));
     let (code, out) = s.e.run(&["--context"]);
     assert_eq!(code, 7);
     assert!(out.contains("SESSIONS OFF"));
@@ -1211,7 +1224,7 @@ fn profile_env() -> (Sess, PathBuf) {
     write(&root.join("src/gui/popup.rs"), "// popup");
     write(&root.join("docs/notes.md"), "notes");
     write(&root.join("target/x.rs"), "built");
-    s.e.append_cfg(&format!("\n[profiles.app]\nroot = \"{}\"\ncode = [\"src/*\"]\n", root.display()));
+    s.e.append_cfg(&format!("\n[profiles.app]\nroot = {}\ncode = [\"src/*\"]\n", toml_path(&root)));
     let gui = serde_json::json!({"app": {"presets": {"gui": {
         "code": ["src/gui/popup.rs"], "chats": [SID2], "research": ["rust/memory-a"]}}}});
     write(&s.e.conf_dir.join("profiles.json"), &gui.to_string());
@@ -1245,7 +1258,7 @@ fn a_profile_preset_loads_code_chats_and_research_without_a_window() {
     assert_eq!(code, 0, "{out}");
     let lines: Vec<&str> = out.lines().collect();
     let c = lines.iter().position(|l| *l == "CODE src/gui/popup.rs").expect("CODE line");
-    assert!(lines[c + 1].ends_with("src/gui/popup.rs") && lines[c + 1].contains("bytes  "), "{out}");
+    assert!(lines[c + 1].split("bytes  ").nth(1).is_some_and(|p| Path::new(p).ends_with("src/gui/popup.rs")), "{out}");
     assert!(!out.contains("src/main.rs"), "{out}"); // not in the preset
     let chat = lines.iter().position(|l| l.starts_with("CHAT \"Second one\"")).expect("CHAT line");
     let doc = lines.iter().position(|l| l.contains("chars  ") && l.contains("memory-a")).expect("research line");
@@ -1299,10 +1312,10 @@ fn profile_list_unknown_preset_and_no_window() {
 #[test]
 fn same_text_copies_as_python() {
     let py = repo().join("skills/researcher/researcher.py");
-    if Command::new("python3").arg("--version").output().is_err() {
+    let Some(python) = python_cmd() else {
         eprintln!("python3 not found: parity check skipped");
         return;
-    }
+    };
     let e = Env::new();
     let lib = repo().join("examples/library");
     write(
@@ -1322,7 +1335,7 @@ fn same_text_copies_as_python() {
             .output()
             .unwrap();
         assert!(o.status.success());
-        let o = Command::new("python3")
+        let o = Command::new(python)
             .arg("-I")
             .arg(&py)
             .args(["--library", l.to_str().unwrap(), "--out", py_out.to_str().unwrap(), "--sync"])
@@ -1354,10 +1367,10 @@ fn same_text_copies_as_python() {
 #[test]
 fn same_config_edits_and_requests_as_python() {
     let py = repo().join("skills/researcher/researcher.py");
-    if Command::new("python3").arg("--version").output().is_err() {
+    let Some(python) = python_cmd() else {
         eprintln!("python3 not found: parity check skipped");
         return;
-    }
+    };
     let e = Env::new();
     let cases = [
         "",
@@ -1374,7 +1387,7 @@ fn same_config_edits_and_requests_as_python() {
             write(&rs, case);
             write(&pyc, case);
             let a = e.cmd().arg("--config").arg(&rs).args(["--usage-share", answer]).output().unwrap();
-            let b = Command::new("python3")
+            let b = Command::new(python)
                 .arg("-I")
                 .arg(&py)
                 .arg("--config")
@@ -1391,7 +1404,7 @@ fn same_config_edits_and_requests_as_python() {
 
     write(&e.usage_file(), &format!("{REC}\nnot json\n{REC}\n"));
     let a = e.run(&["--usage-send", "--dry-run"]).1;
-    let b = Command::new("python3")
+    let b = Command::new(python)
         .arg("-I")
         .arg(&py)
         .arg("--config")
@@ -1400,7 +1413,7 @@ fn same_config_edits_and_requests_as_python() {
         .env("XDG_DATA_HOME", &e.data)
         .output()
         .unwrap();
-    assert_eq!(a, String::from_utf8_lossy(&b.stdout), "the dry runs differ");
+    assert_eq!(a, String::from_utf8_lossy(&b.stdout).replace("\r\n", "\n"), "the dry runs differ");
 }
 
 /// The same load gives the same record in both versions (only the random install id differs),
@@ -1408,15 +1421,15 @@ fn same_config_edits_and_requests_as_python() {
 #[test]
 fn same_usage_records_as_python() {
     let py = repo().join("skills/researcher/researcher.py");
-    if Command::new("python3").arg("--version").output().is_err() {
+    let Some(python) = python_cmd() else {
         eprintln!("python3 not found: parity check skipped");
         return;
-    }
+    };
     let (s, presets) = context_env();
     save_preset(&presets, "work", &[SID2, SID4]);
     let py_data = s.e.tmp.join("py-data");
     let py_run = |args: &[&str]| {
-        let o = Command::new("python3")
+        let o = Command::new(python)
             .arg("-I")
             .arg(&py)
             .arg("--config")
@@ -1465,6 +1478,7 @@ fn no_library_without_window_asks_nothing() {
     assert_eq!(read(&e.cfg), "default_set = \"x\"\n"); // config untouched
 }
 
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn no_display_falls_back_to_the_message() {
     let e = Env::new();

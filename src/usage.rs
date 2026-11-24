@@ -44,8 +44,10 @@ const FORMS: [&str; 5] = ["pdf", "html", "md", "txt", "chat"];
 pub const CHARS_PER_K: usize = 2400;
 
 pub fn data_home() -> String {
-    let base = dirs::data_dir()
-        .map(|p| p.to_string_lossy().into_owned())
+    let base = std::env::var("XDG_DATA_HOME")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .or_else(|| dirs::data_dir().map(|p| p.to_string_lossy().into_owned()))
         .unwrap_or_else(|| util::expanduser("~/.local/share"));
     util::join(&base, crate::APP)
 }
@@ -465,6 +467,13 @@ pub fn send_in_background(cfg_path: &str) {
     {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
     }
     let _ = cmd.spawn();
 }
