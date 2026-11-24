@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
-import worker, { short } from "../src/index.js";
+import worker, { badgeSvg, short } from "../src/index.js";
 import { MAX_LOADS, parsePayload, recordError, rowHash } from "../src/validate.js";
 
 const NOW = Date.UTC(2026, 10, 16, 12);
@@ -216,6 +216,27 @@ test("badges: shields.io endpoint JSON with the two token totals", async () => {
   }
   res = await worker.fetch(new Request("https://x.test/v1/badge/squeezed", { method: "POST" }), env);
   assert.equal(res.status, 405);
+});
+
+test("badges: SVG images drawn by the Worker itself", async () => {
+  const env = { DB: fakeD1() };
+  await post(sent(record({ raw: 69652 + 2300, lib_chars: 69652 }), record({ lib_chars: 69652 + 2_300_000 })), env);
+  let res = await worker.fetch(new Request("https://x.test/v1/badge/squeezed.svg"), env);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-type"), "image/svg+xml; charset=utf-8");
+  assert.equal(res.headers.get("cache-control"), "public, max-age=300");
+  let svg = await res.text();
+  assert.match(svg, /^<svg xmlns="http:\/\/www.w3.org\/2000\/svg" width="\d+" height="20"/);
+  assert.match(svg, /<title>tokens squeezed: 1k<\/title>/);
+  assert.match(svg, /fill="#4c1"/);
+  svg = await (await worker.fetch(new Request("https://x.test/v1/badge/not-loaded.svg"), env)).text();
+  assert.match(svg, /<title>tokens not loaded: 1M<\/title>/);
+  for (const p of ["/v1/badge/.svg", "/v1/badge/toString.svg", "/v1/badge/squeezed.svg/x", "/v1/badge/squeezed.png"]) {
+    assert.equal((await worker.fetch(new Request("https://x.test" + p), env)).status, 404, p);
+  }
+  res = await worker.fetch(new Request("https://x.test/v1/badge/squeezed.svg", { method: "POST" }), env);
+  assert.equal(res.status, 405);
+  assert.match(badgeSvg("a<b", "&", "#fff"), /<title>a&lt;b: &amp;<\/title>/);
 });
 
 test("short numbers for badges", () => {

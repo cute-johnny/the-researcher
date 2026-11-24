@@ -3,7 +3,8 @@
 //   POST /v1/usage   body = what `researcher --usage-send` sends (schema 2), or the file
 //                    `researcher --usage-export` writes (schema 1)
 //   GET  /v1/stats   public totals: installs, loads, characters, estimated tokens (the parts shown)
-//   GET  /v1/badge/squeezed, /v1/badge/not-loaded   the token totals as shields.io badges
+//   GET  /v1/badge/squeezed.svg, /v1/badge/not-loaded.svg   the token totals as badge images
+//   GET  /v1/badge/squeezed, /v1/badge/not-loaded   the same as shields.io endpoint JSON
 //
 // Nothing here reads, logs or stores an IP address, a header or a GitHub login. The
 // only data kept is what validate.js lets through: a random install id, a day,
@@ -33,9 +34,38 @@ const STATS =
   "COALESCE(SUM(MAX(lib_chars - chars, 0) * 1000.0 / tk), 0) AS tokens_not_loaded, " +
   "COALESCE(SUM(chat > 0), 0) AS chat_loads, COUNT(pdf_chars) AS loads_with_formats FROM loads";
 const BADGES = {
-  squeezed: { label: "tokens squeezed", key: "tokens_squeezed", color: "brightgreen" },
-  "not-loaded": { label: "tokens not loaded", key: "tokens_not_loaded", color: "blue" },
+  squeezed: { label: "tokens squeezed", key: "tokens_squeezed", color: "brightgreen", hex: "#4c1" },
+  "not-loaded": { label: "tokens not loaded", key: "tokens_not_loaded", color: "blue", hex: "#007ec6" },
 };
+
+// Rough Verdana 11px widths; textLength makes the text fit its box exactly either way.
+function textWidth(s) {
+  let w = 0;
+  for (const c of s) w += c === " " || c === "." ? 3.6 : /[0-9]/.test(c) ? 7 : /[A-Z]/.test(c) ? 7.5 : /[ijlt]/.test(c) ? 3.8 : /[mw]/.test(c) ? 9.7 : 6.6;
+  return Math.round(w);
+}
+
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+/** A flat badge like shields.io draws, so GitHub's image proxy needs no third site. */
+export function badgeSvg(label, message, hex) {
+  const lw = textWidth(label) + 10, mw = textWidth(message) + 10, w = lw + mw;
+  const [l, m] = [esc(label), esc(message)];
+  const text = (x, len, t) =>
+    `<text x="${x * 10}" y="150" fill="#010101" fill-opacity=".3" transform="scale(.1)" textLength="${len * 10}">${t}</text>` +
+    `<text x="${x * 10}" y="140" transform="scale(.1)" fill="#fff" textLength="${len * 10}">${t}</text>`;
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="20" role="img" aria-label="${l}: ${m}">` +
+    `<title>${l}: ${m}</title>` +
+    `<linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>` +
+    `<clipPath id="r"><rect width="${w}" height="20" rx="3" fill="#fff"/></clipPath>` +
+    `<g clip-path="url(#r)"><rect width="${lw}" height="20" fill="#555"/><rect x="${lw}" width="${mw}" height="20" fill="${hex}"/>` +
+    `<rect width="${w}" height="20" fill="url(#s)"/></g>` +
+    `<g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" text-rendering="geometricPrecision" font-size="110">` +
+    text(lw / 2, lw - 10, l) + text(lw + mw / 2, mw - 10, m) +
+    `</g></svg>`
+  );
+}
 
 /** 1234 -> "1.2k", 2712345 -> "2.7M": short enough for a badge. */
 export function short(n) {
@@ -141,8 +171,8 @@ async function stats(env) {
   return json(await totals(env), 200, { "cache-control": "public, max-age=300" });
 }
 
-// 300 s is the shortest cache shields.io accepts; GitHub's image proxy follows what shields.io
-// sends, so a new load shows on the repo page in about 5 to 10 minutes.
+// 300 s is the shortest cache shields.io accepts; the .svg badges use the same, so a new load
+// shows on the repo page in about 5 to 10 minutes.
 const BADGE_CACHE_SECONDS = 300;
 
 /** shields.io "endpoint" JSON: https://img.shields.io/endpoint?url=<this URL> */
@@ -154,6 +184,19 @@ async function badge(env, which) {
     200,
     { "cache-control": `public, max-age=${BADGE_CACHE_SECONDS}` },
   );
+}
+
+/** The badge image itself. GitHub's image proxy gave up (504) waiting on shields.io for these. */
+async function badgeImage(env, which) {
+  const b = BADGES[which];
+  const t = await totals(env);
+  return new Response(badgeSvg(b.label, short(t[b.key]), b.hex), {
+    headers: {
+      ...HEADERS,
+      "content-type": "image/svg+xml; charset=utf-8",
+      "cache-control": `public, max-age=${BADGE_CACHE_SECONDS}`,
+    },
+  });
 }
 
 export default {
@@ -171,6 +214,10 @@ export default {
     if (pathname === "/v1/stats") {
       if (request.method !== "GET") return json({ ok: false, error: "GET only" }, 405, { allow: "GET" });
       return stats(env);
+    }
+    if (pathname.startsWith("/v1/badge/") && pathname.endsWith(".svg") && Object.hasOwn(BADGES, pathname.slice(10, -4))) {
+      if (request.method !== "GET") return json({ ok: false, error: "GET only" }, 405, { allow: "GET" });
+      return badgeImage(env, pathname.slice(10, -4));
     }
     if (pathname.startsWith("/v1/badge/") && Object.hasOwn(BADGES, pathname.slice(10))) {
       if (request.method !== "GET") return json({ ok: false, error: "GET only" }, 405, { allow: "GET" });

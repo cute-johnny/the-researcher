@@ -4,7 +4,7 @@
 
 <p align="center"><img src="docs/img/header.jpg" alt="A white robot kneels in a field of grass and dandelions at sunset, looking at a dandelion clock in its hand" width="480"></p>
 
-[![tokens squeezed](https://img.shields.io/endpoint?url=https://the-researcher-usage.ludalunizz.workers.dev/v1/badge/squeezed)](#sharing-opt-in) [![tokens not loaded](https://img.shields.io/endpoint?url=https://the-researcher-usage.ludalunizz.workers.dev/v1/badge/not-loaded)](#sharing-opt-in)   *so far, by all users*
+[![tokens squeezed](https://the-researcher-usage.ludalunizz.workers.dev/v1/badge/squeezed.svg)](#sharing-opt-in) [![tokens not loaded](https://the-researcher-usage.ludalunizz.workers.dev/v1/badge/not-loaded.svg)](#sharing-opt-in)   *so far, by all users*
 
 New here? The [user manual](docs/MANUAL.md) walks through everything step by step.
 

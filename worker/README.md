@@ -43,9 +43,11 @@ and the token estimates (per record, characters / `tk` × 1000): `tokens_not_loa
 (0.73 per loaded HTML character and 1.2 per PDF character: reading text instead of the original,
 from the ratios in the main README; only records that carry `fmt_chars` add to it, and
 `loads_with_formats` says how many do).
-`GET /v1/badge/squeezed` and `GET /v1/badge/not-loaded` give the same two numbers in the
-shields.io endpoint format, for the README badges
-(`https://img.shields.io/endpoint?url=<worker>/v1/badge/squeezed`).
+`GET /v1/badge/squeezed.svg` and `GET /v1/badge/not-loaded.svg` draw the same two numbers as
+badge images, for the README badges. `GET /v1/badge/squeezed` and `GET /v1/badge/not-loaded`
+give them in the shields.io endpoint format
+(`https://img.shields.io/endpoint?url=<worker>/v1/badge/squeezed`); the README no longer uses
+those, because GitHub's image proxy timed out waiting on shields.io.
 
 ## What it keeps and does not keep
 
