@@ -116,9 +116,7 @@ struct Args {
 }
 
 fn env_or_dir(var: &str, d: Option<std::path::PathBuf>, fallback: &str) -> String {
-    let base = std::env::var(var)
-        .ok()
-        .filter(|v| !v.is_empty())
+    let base = util::xdg_override(var)
         .or_else(|| d.map(|p| p.to_string_lossy().into_owned()))
         .unwrap_or_else(|| util::expanduser(fallback));
     util::join(&base, APP)

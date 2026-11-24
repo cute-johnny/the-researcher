@@ -76,18 +76,24 @@ class ConfigError(Exception):
 
 # ---------------------------------------------------------------- paths and config
 
+def _home(xdg, native, legacy):
+    """XDG folder if set; on Windows else the native one (%APPDATA% / %LOCALAPPDATA%), but an
+    existing old ~/.config-style folder is kept while the native one does not exist yet."""
+    if os.environ.get(xdg):
+        return os.path.join(os.environ[xdg], APP)
+    if os.name == "nt" and os.environ.get(native):
+        new = os.path.join(os.environ[native], APP)
+        old = os.path.join(os.path.expanduser(legacy), APP)
+        return old if not os.path.exists(new) and os.path.exists(old) else new
+    return os.path.join(os.path.expanduser(legacy), APP)
+
+
 def config_home():
-    base = (os.environ.get("XDG_CONFIG_HOME")
-            or (os.environ.get("APPDATA") if os.name == "nt" else None)
-            or os.path.expanduser("~/.config"))
-    return os.path.join(base, APP)
+    return _home("XDG_CONFIG_HOME", "APPDATA", "~/.config")
 
 
 def cache_home():
-    base = (os.environ.get("XDG_CACHE_HOME")
-            or (os.environ.get("LOCALAPPDATA") if os.name == "nt" else None)
-            or os.path.expanduser("~/.cache"))
-    return os.path.join(base, APP)
+    return _home("XDG_CACHE_HOME", "LOCALAPPDATA", "~/.cache")
 
 
 def text_home():
@@ -1377,10 +1383,7 @@ FORMS = USAGE_KINDS + ("chat",)  # what a record counts per format
 
 
 def data_home():
-    base = (os.environ.get("XDG_DATA_HOME")
-            or (os.environ.get("APPDATA") if os.name == "nt" else None)
-            or os.path.expanduser("~/.local/share"))
-    return os.path.join(base, APP)
+    return _home("XDG_DATA_HOME", "APPDATA", "~/.local/share")
 
 
 def usage_file():
@@ -1712,7 +1715,7 @@ def send_in_background(cfg_path):
     if os.name == "posix":
         kw = {"start_new_session": True}
     elif os.name == "nt":
-        kw = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW}
+        kw = {"creationflags": subprocess.DETACHED_PROCESS}
     else:
         kw = {}
     try:

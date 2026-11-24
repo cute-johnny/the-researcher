@@ -79,6 +79,18 @@ pub fn universal_newlines(s: &str) -> String {
     if s.contains('\r') { s.replace("\r\n", "\n").replace('\r', "\n") } else { s.to_string() }
 }
 
+/// An `XDG_*` folder override. Only read on Windows, where `dirs` ignores it; on Linux `dirs`
+/// already honours it and on macOS it is left alone so existing installs keep their folders.
+#[cfg(windows)]
+pub fn xdg_override(var: &str) -> Option<String> {
+    std::env::var(var).ok().filter(|v| !v.is_empty())
+}
+
+#[cfg(not(windows))]
+pub fn xdg_override(_var: &str) -> Option<String> {
+    None
+}
+
 /// `os.path.expanduser` for `~` and `~/...` (not `~user`).
 pub fn expanduser(p: &str) -> String {
     let home = || dirs::home_dir().map(|h| h.to_string_lossy().into_owned());

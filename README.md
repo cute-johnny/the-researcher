@@ -117,7 +117,7 @@ Eighty-five documents from one person's library is still a sample of one topic m
 - Linux x86_64 with a desktop (Wayland or X11) for the popup. Without a display it uses your saved defaults.
 - For PDFs: `pdftotext` from poppler (`poppler-utils`)
 
-The program is written in Rust (`src/`) and the popup in egui, so nothing else is needed. Windows and macOS builds are checked in CI but not supported yet; on those systems the config and data folders will be the native ones (for example `%APPDATA%\researcher` on Windows).
+The program is written in Rust (`src/`) and the popup in egui, so nothing else is needed. Windows and macOS builds are checked in CI but not supported yet; on those systems the config and data folders will be the native ones (for example `%APPDATA%\researcher` on Windows). `researcher.py` on Windows uses the same folders now; if you already have the old `~/.config/researcher`, `~/.local/share/researcher` or `~/.cache/researcher`, it keeps using them until the native folder exists. On Windows `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_CACHE_HOME` override the folders (handy for test runs).
 
 The original Python version, `skills/researcher/researcher.py`, still works and is kept as a fallback. It needs Python 3.11 or newer, and for its popup GTK 4 and PyGObject (`python3-gi`, `gir1.2-gtk-4.0` on Debian/Ubuntu). Both versions use the same files and write the same text copies (a test checks this byte for byte), so you can switch at any time.
 
