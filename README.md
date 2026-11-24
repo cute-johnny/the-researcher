@@ -66,6 +66,7 @@ researcher --usage-export [FILE]   write the records to FILE (default researcher
 
 - **Squeezed away** is real: converted text before minus after the squeeze, for the documents you loaded.
 - **Converted** is the saving from reading text instead of the original: an HTML page costs 1.73x its converted text and a PDF 2.2x (measured below), so each loaded HTML character saves 0.73 and each PDF character 1.2 of a text character. Markdown, text files and chats are read as they are and save nothing here. Older log lines (before 0.5) do not say their formats and add nothing to this number.
+- **Counted against how you read research before.** If you used to give Claude the PDFs, run `researcher --usage-before pdf` (or `html`): every loaded document that also exists in your library as a PDF then counts its saving against the PDF, even when the researcher loaded the HTML or Markdown copy (1.2 per character instead of 0.73 or 0). A document without a PDF counts against the one copy it has. Without the setting (a new user, or `--usage-before none`), each document counts against the file it was loaded from, on the reasoning that you keep one copy of each and would have read that one; research kept only as Markdown or text then saves nothing here. Saved as `before = "pdf"` under `[usage]` in `config.toml`; log lines from before 0.7 count the loaded format.
 - **Left unticked** compares each load with loading your whole library; it is a ceiling, not a measurement, because nobody would load everything. For earlier chats the comparison is every past chat up to the newest one you picked (last active at or before it), minus the ones you loaded: what catching up on all of them would have cost.
 - Tokens are estimated from characters (2.4 per token, see below), not counted by a tokenizer.
 - Switch the log off with `[usage]` `log = false` in `config.toml`; then no log and no install id are written.
@@ -198,6 +199,7 @@ researcher --sync                 make or refresh the text copy of the whole lib
 researcher --usage                local totals of what it saved (see Usage log)
 researcher --usage-export [FILE]  write the anonymous usage records to a file; nothing is sent
 researcher --usage-share on|off   share the anonymous usage counts with the project, or not
+researcher --usage-before pdf|html|none  how you read research before; the conversion saving counts against it
 researcher --usage-send [--dry-run]  send the usage records not sent yet (only with sharing on)
 researcher --init [LIBRARY]       write a starter config
 researcher --sessions             list tracked closed sessions (opt-in, see Sessions)

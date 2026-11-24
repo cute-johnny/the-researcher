@@ -99,6 +99,10 @@ struct Args {
     /// share the anonymous usage counts with the project (on) or not (off); saved in the config
     #[arg(long, value_name = "on|off", value_parser = ["on", "off"])]
     usage_share: Option<String>,
+    /// how you read research before the researcher (pdf, html), counted against in the
+    /// conversion saving; none = the format of each file loaded. Saved in the config
+    #[arg(long, value_name = "pdf|html|none", value_parser = ["pdf", "html", "none"])]
+    usage_before: Option<String>,
     /// send the usage records not sent yet (only when sharing is on)
     #[arg(long)]
     usage_send: bool,
@@ -162,6 +166,9 @@ library = "{library}"
 # [usage]
 # log = false
 # share = false
+# How you read research before (pdf or html): a document that also exists in that format
+# counts its conversion saving against it (`researcher --usage-before pdf|html|none`).
+# before = "pdf"
 "#;
 
 fn init_config(path: &str, library: &str) -> i32 {
@@ -255,7 +262,20 @@ fn set_library(cfg_path: &str, dir: &str) -> Result<(), String> {
 
 /// Put `share = true|false` under `[usage]` in the config (comments and everything else kept).
 fn set_share(cfg_path: &str, on: bool) -> Result<(), String> {
-    let line = format!("share = {on}");
+    let want = if on { usage::Share::On } else { usage::Share::Off };
+    set_usage(cfg_path, "share", &on.to_string(), |c| usage::share(c) == want)
+}
+
+/// Put `before = "pdf"|"html"|"none"` under `[usage]` in the config.
+fn set_before(cfg_path: &str, form: &str) -> Result<(), String> {
+    let want = if form == "none" { None } else { Some(form) };
+    set_usage(cfg_path, "before", &format!("\"{form}\""), |c| usage::before(c) == want)
+}
+
+/// Put `key = value` under `[usage]` in the config (comments and everything else kept);
+/// `check` must hold for the config as it would be written.
+fn set_usage(cfg_path: &str, key: &str, value: &str, check: impl Fn(&library::Config) -> bool) -> Result<(), String> {
+    let line = format!("{key} = {value}");
     let body = match std::fs::read_to_string(cfg_path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => format!("[usage]\n{line}\n"),
         Err(e) => return Err(e.to_string()),
@@ -271,7 +291,7 @@ fn set_share(cfg_path: &str, on: bool) -> Result<(), String> {
                     let start = old[h.end()..].find('\n').map_or(old.len(), |i| h.end() + i + 1);
                     let next = regex::Regex::new(r"(?m)^[ \t]*\[").expect("valid");
                     let end = next.find(&old[start..]).map_or(old.len(), |m| start + m.start());
-                    let key = regex::Regex::new(r"(?m)^[ \t]*share[ \t]*=.*$").expect("valid");
+                    let key = regex::Regex::new(&format!(r"(?m)^[ \t]*{key}[ \t]*=.*$")).expect("valid");
                     let section = &old[start..end];
                     let section = if key.is_match(section) {
                         key.replace(section, regex::NoExpand(&line)).into_owned()
@@ -290,7 +310,7 @@ fn set_share(cfg_path: &str, on: bool) -> Result<(), String> {
         }
     };
     let parsed: library::Config = body.parse().map_err(|e: toml::de::Error| e.to_string())?;
-    if usage::share(&parsed) != if on { usage::Share::On } else { usage::Share::Off } {
+    if !check(&parsed) {
         return Err("the config would not read back the same answer".into());
     }
     util::make_parent(cfg_path).map_err(|e| e.to_string())?;
@@ -355,7 +375,7 @@ fn run(args: Args) -> i32 {
     let cfg_dir = util::dirname(&cfg_path);
     let state_path = util::join(&cfg_dir, "choices.json");
 
-    if args.usage || args.usage_send || args.usage_share.is_some() {
+    if args.usage || args.usage_send || args.usage_share.is_some() || args.usage_before.is_some() {
         let cfg = match library::load_config(&cfg_path) {
             Ok(c) => c,
             Err(e) => {
@@ -382,6 +402,28 @@ fn run(args: Args) -> i32 {
                 }
                 Err(e) => {
                     println!("CONFIG ERROR: could not save `share` under [usage] in {cfg_path}: {e}");
+                    6
+                }
+            };
+        }
+        if let Some(form) = &args.usage_before {
+            return match set_before(&cfg_path, form) {
+                Ok(()) if form == "none" => {
+                    println!(
+                        "USAGE BEFORE: none (saved as `before = \"none\"` under [usage] in {cfg_path}); each \
+                         document counts against the format of the file loaded"
+                    );
+                    0
+                }
+                Ok(()) => {
+                    println!(
+                        "USAGE BEFORE: {form} (saved as `before = \"{form}\"` under [usage] in {cfg_path}); a \
+                         document that also exists as {form} counts its conversion saving against {form}"
+                    );
+                    0
+                }
+                Err(e) => {
+                    println!("CONFIG ERROR: could not save `before` under [usage] in {cfg_path}: {e}");
                     6
                 }
             };
@@ -714,7 +756,7 @@ fn research_finish(
     let mut share_note = None;
     if !docs.is_empty()
         && usage::enabled(&cfg)
-        && let Ok(rec) = usage::record(&docs, &mut texts, &paths)
+        && let Ok(rec) = usage::record(&docs, &mut texts, &paths, usage::before(&cfg))
     {
         share_note = usage::finish(&cfg, cfg_path, &rec); // the log must never break a load
     }

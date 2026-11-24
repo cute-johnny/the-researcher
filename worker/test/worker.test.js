@@ -31,6 +31,13 @@ const record2 = (over = {}) => ({
   fmt_chars: { chat: 0, html: 40000, md: 29652, pdf: 0, txt: 0 }, // adds up to chars (69652)
   ...over,
 });
+/** A version 3 record: `vs_chars` = the same characters, counted against the format read before. */
+const record3 = (over = {}) => ({
+  ...record2(),
+  v: 3,
+  vs_chars: { chat: 0, html: 0, md: 29652, pdf: 40000, txt: 0 }, // the 4 HTML reports also exist as PDF
+  ...over,
+});
 const payload = (...loads) => ({ schema: 1, loads: loads.length ? loads : [record()] });
 /** What `researcher --usage-send` sends: schema 2, every record numbered by its log line. */
 const sent = (...loads) => ({ schema: 2, loads: loads.map((r, i) => ({ ...r, seq: r.seq ?? i + 1 })) });
@@ -302,6 +309,29 @@ test("tokens squeezed = the squeeze + reading text instead of the HTML/PDF origi
   assert.equal(badge.message, short(squeeze + convert));
 });
 
+test("version 3: the conversion saving is counted against the format read before", async () => {
+  const env = { DB: fakeD1() };
+  // loaded: 40000 HTML chars + 29652 md; the user read PDFs before and all 4 HTML reports exist as PDF
+  await post(sent(record3(), record2({ seq: 2 })), env); // plus a version 2 load: counted as loaded (HTML)
+  const stats = await (await worker.fetch(new Request("https://x.test/v1/stats"), env)).json();
+  assert.equal(stats.tokens_from_conversion, Math.round(((40000 * 1.2) * 1000) / 2300 + ((40000 * 0.73) * 1000) / 2300));
+  assert.equal(stats.loads, 2);
+});
+
+test("version 3 records are checked", () => {
+  assert.equal(recordError(record3(), NOW), null);
+  for (const bad of [
+    record3({ vs_chars: undefined }), // v3 needs vs_chars
+    record3({ vs_chars: { chat: 0, html: 0, md: 29652, pdf: 40001, txt: 0 } }), // does not add up to chars
+    record3({ vs_chars: { html: 0, md: 29652, pdf: 40000, txt: 0 } }), // chat missing
+    record3({ vs_chars: { chat: 0, html: -1, md: 29653, pdf: 40000, txt: 0 } }),
+    record3({ vs_chars: { chat: 1, html: 0, md: 29651, pdf: 40000, txt: 0 } }), // a chat counted as something else
+    record2({ vs_chars: { chat: 0, html: 0, md: 29652, pdf: 40000, txt: 0 } }), // v2 has none
+  ]) {
+    assert.notEqual(recordError(bad, NOW), null, JSON.stringify(bad.vs_chars));
+  }
+});
+
 test("chat loads are counted as loads and have no conversion saving", async () => {
   const env = { DB: fakeD1() };
   const chat = record2({
@@ -324,8 +354,11 @@ test("the migration brings an old table to the new shape", () => {
     raw INTEGER NOT NULL, chars INTEGER NOT NULL, lib_docs INTEGER NOT NULL, lib_chars INTEGER NOT NULL, tk INTEGER NOT NULL)`);
   db.exec("INSERT INTO loads VALUES ('h','7d75b3c23f2e4970','2026-11-16',1,0,1,0,0,1,1,1,1,1,2300)");
   db.exec(readFileSync(new URL("../migrations/0002_formats.sql", import.meta.url), "utf8"));
-  const row = db.prepare("SELECT chat, pdf_chars, html_chars, chat_chars FROM loads").get();
-  assert.deepEqual({ ...row }, { chat: 0, pdf_chars: null, html_chars: null, chat_chars: null });
+  db.exec(readFileSync(new URL("../migrations/0003_vs.sql", import.meta.url), "utf8"));
+  const row = db.prepare("SELECT chat, pdf_chars, html_chars, chat_chars, vs_pdf_chars, vs_html_chars FROM loads").get();
+  assert.deepEqual({ ...row }, {
+    chat: 0, pdf_chars: null, html_chars: null, chat_chars: null, vs_pdf_chars: null, vs_html_chars: null,
+  });
   // the migrated table has the same columns as a fresh one
   const fresh = new DatabaseSync(":memory:");
   fresh.exec(readFileSync(new URL("../schema.sql", import.meta.url), "utf8"));

@@ -136,8 +136,10 @@ class UsageTests(Env):
         self.run_main("--no-popup", "rust")
         (rec,) = self.records()
         self.assertEqual(rec["docs"], 3)
-        self.assertEqual(rec["v"], 2)
+        self.assertEqual(rec["v"], 3)
         self.assertEqual(rec["fmt"], {"pdf": 0, "html": 1, "md": 1, "txt": 1, "chat": 0})
+        # no [usage] before: every document counts against the format it was loaded from
+        self.assertEqual(rec["vs_chars"], rec["fmt_chars"])
         # the loaded characters per format add up to the loaded characters
         self.assertEqual(sum(rec["fmt_chars"].values()), rec["chars"])
         self.assertEqual(rec["fmt_chars"]["chat"], 0)
@@ -148,6 +150,33 @@ class UsageTests(Env):
         self.assertGreaterEqual(rec["raw"], rec["chars"])
         self.assertRegex(rec["id"], r"^[0-9a-f]{16}$")
         self.assertEqual(rec["tk"], R.CHARS_PER_K)
+
+    def test_load_counts_against_the_format_read_before(self):
+        write(os.path.join(self.lib, "rust", "linux.pdf"), "%PDF")  # the HTML report also as PDF
+        write(os.path.join(self.lib, "rust", "memory-a.pdf"), "%PDF")  # and the markdown one
+        code, out = self.run_main("--usage-before", "pdf")
+        self.assertEqual(code, 0, out)
+        self.assertTrue(out.startswith("USAGE BEFORE: pdf"), out)
+        self.assertIn('[usage]\nbefore = "pdf"\n', read(self.cfg))
+        self.run_main("--no-popup", "rust")
+        rec = self.records()[0]
+        fc, vs = rec["fmt_chars"], rec["vs_chars"]
+        self.assertEqual(vs["pdf"], fc["html"] + fc["md"])
+        self.assertEqual((vs["html"], vs["md"]), (0, 0))
+        self.assertEqual(vs["txt"], fc["txt"])  # memory-b has no PDF: the one copy it has
+        self.run_main("--usage-before", "none")  # back: the loaded formats; line replaced, not added
+        self.assertEqual(read(self.cfg).count("before ="), 1)
+        self.run_main("--no-popup", "rust")
+        rec = self.records()[1]
+        self.assertEqual(rec["vs_chars"], rec["fmt_chars"])
+
+    def test_summary_counts_against_before(self):
+        rec = {"v": 3, "docs": 1, "raw": 1000, "chars": 1000, "lib_chars": 1000, "tk": 1000,
+               "fmt_chars": {"chat": 0, "html": 1000, "md": 0, "pdf": 0, "txt": 0},
+               "vs_chars": {"chat": 0, "html": 0, "md": 0, "pdf": 1000, "txt": 0}}
+        self.assertAlmostEqual(R.usage_summary([rec])["tokens_converted"], 1200.0)
+        v2 = {k: v for k, v in rec.items() if k != "vs_chars"} | {"v": 2}
+        self.assertAlmostEqual(R.usage_summary([v2])["tokens_converted"], 730.0)
 
     def test_log_holds_no_names_paths_or_titles(self):
         self.run_main("--no-popup", "rust")
@@ -1367,8 +1396,9 @@ class ChatUsageTests(SessionEnv):
         self.assertTrue(out.rstrip().endswith(
             "USAGE SHARING: not decided (researcher --usage-share on|off)"), out)
         (rec,) = self.records()
-        self.assertEqual(rec["v"], 2)
+        self.assertEqual(rec["v"], 3)
         self.assertEqual(rec["docs"], 2)
+        self.assertEqual(rec["vs_chars"], rec["fmt_chars"])  # a chat never counts against a file format
         self.assertEqual(rec["fmt"], {"pdf": 0, "html": 0, "md": 0, "txt": 0, "chat": 2})
         self.assertEqual(rec["fmt_chars"]["chat"], rec["chars"])
         self.assertEqual(rec["raw"], rec["chars"])  # a chat is read as written: nothing squeezed
@@ -1416,7 +1446,7 @@ class ChatUsageTests(SessionEnv):
         self.assertNotIn("USAGE SHARING", out)
         body = got.get(timeout=20)
         self.assertEqual(body["schema"], 2)
-        self.assertEqual((body["loads"][0]["v"], body["loads"][0]["fmt"]["chat"]), (2, 1))
+        self.assertEqual((body["loads"][0]["v"], body["loads"][0]["fmt"]["chat"]), (3, 1))
 
 
 class ConversionTests(Env):

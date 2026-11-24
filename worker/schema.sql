@@ -22,7 +22,11 @@ CREATE TABLE IF NOT EXISTS loads (
   html_chars INTEGER,
   md_chars   INTEGER,
   txt_chars  INTEGER,
-  chat_chars INTEGER
+  chat_chars INTEGER,
+  -- record version 3: the characters counted against PDF / HTML, the format the user would
+  -- otherwise have read (NULL = count pdf_chars / html_chars). Same as migrations/0003_vs.sql.
+  vs_pdf_chars  INTEGER,
+  vs_html_chars INTEGER
 );
 CREATE INDEX IF NOT EXISTS loads_day ON loads (day);
 CREATE INDEX IF NOT EXISTS loads_id ON loads (id);

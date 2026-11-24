@@ -10,10 +10,13 @@
 // Two record versions (`v`):
 //   1: counts per format (pdf, html, md, txt) and character sums;
 //   2: also `chat` (earlier Claude Code chats loaded as context) in `fmt`, and `fmt_chars`,
-//      the loaded characters per format, which is what the conversion saving needs.
+//      the loaded characters per format, which is what the conversion saving needs;
+//   3: also `vs_chars`: the same characters per format the user would otherwise have read
+//      (`[usage] before` in the app when the document exists in that format, else the loaded
+//      file's own format). The conversion saving is counted against these.
 
-export const SCHEMA = 2; // newest record version (`v`)
-const VERSIONS = [1, 2];
+export const SCHEMA = 3; // newest record version (`v`)
+const VERSIONS = [1, 2, 3];
 export const SCHEMAS = [1, 2]; // request versions (`schema`)
 const SEQ_MAX = 1_000_000_000;
 export const MAX_LOADS = 200; // records per request
@@ -22,8 +25,9 @@ export const MAX_BODY = 262144; // bytes per request
 const KINDS_V1 = ["pdf", "html", "md", "txt"];
 const KINDS_V2 = [...KINDS_V1, "chat"];
 const LOAD_KEYS = ["chars", "day", "docs", "fmt", "id", "lib_chars", "lib_docs", "raw", "src_bytes", "tk", "v"];
-/** The keys a record must have: version 2 adds fmt_chars, request schema 2 adds seq. */
-const keysFor = (v, withSeq) => [...LOAD_KEYS, ...(v === 2 ? ["fmt_chars"] : []), ...(withSeq ? ["seq"] : [])].sort();
+/** The keys a record must have: version 2 adds fmt_chars, 3 vs_chars, request schema 2 adds seq. */
+const keysFor = (v, withSeq) =>
+  [...LOAD_KEYS, ...(v >= 2 ? ["fmt_chars"] : []), ...(v >= 3 ? ["vs_chars"] : []), ...(withSeq ? ["seq"] : [])].sort();
 const COUNT_MAX = 1_000_000; // documents
 const BYTES_MAX = 10_000_000_000; // source bytes (not in the stats)
 const SIZE_MAX = 1_000_000_000; // characters: they feed the public token numbers
@@ -60,7 +64,7 @@ export function recordError(rec, now = Date.now(), withSeq = false) {
   // characters per 1000 tokens (the app sends 2400): the stats divide by it, so a tiny one
   // would let one record add billions of tokens
   if (!Number.isSafeInteger(rec.tk) || rec.tk < 1000 || rec.tk > 10_000) return "bad tk";
-  const kinds = rec.v === 2 ? KINDS_V2 : KINDS_V1;
+  const kinds = rec.v >= 2 ? KINDS_V2 : KINDS_V1;
   if (!isObject(rec.fmt) || !sameKeys(rec.fmt, [...kinds].sort())) return "bad fmt";
   let sum = 0;
   for (const k of kinds) {
@@ -68,7 +72,7 @@ export function recordError(rec, now = Date.now(), withSeq = false) {
     sum += rec.fmt[k];
   }
   if (sum !== rec.docs) return "fmt does not add up to docs";
-  if (rec.v === 2) {
+  if (rec.v >= 2) {
     if (!isObject(rec.fmt_chars) || !sameKeys(rec.fmt_chars, [...kinds].sort())) return "bad fmt_chars";
     let chars = 0;
     for (const k of kinds) {
@@ -76,6 +80,17 @@ export function recordError(rec, now = Date.now(), withSeq = false) {
       chars += rec.fmt_chars[k];
     }
     if (chars !== rec.chars) return "fmt_chars does not add up to chars";
+  }
+  if (rec.v >= 3) {
+    if (!isObject(rec.vs_chars) || !sameKeys(rec.vs_chars, [...kinds].sort())) return "bad vs_chars";
+    let chars = 0;
+    for (const k of kinds) {
+      if (!isInt(rec.vs_chars[k], SIZE_MAX)) return "bad vs_chars count";
+      chars += rec.vs_chars[k];
+    }
+    if (chars !== rec.chars) return "vs_chars does not add up to chars";
+    // a chat is read as it is: it is never counted against a file format
+    if (rec.vs_chars.chat !== rec.fmt_chars.chat) return "vs_chars chat differs from fmt_chars";
   }
   return null;
 }
@@ -91,7 +106,8 @@ export function parsePayload(body, now = Date.now()) {
   for (const [i, rec] of body.loads.entries()) {
     const err = recordError(rec, now, withSeq);
     if (err) return { error: `record ${i}: ${err}` };
-    const v2 = rec.v === 2;
+    const v2 = rec.v >= 2;
+    const v3 = rec.v >= 3;
     rows.push({
       id: rec.id,
       day: rec.day,
@@ -114,6 +130,9 @@ export function parsePayload(body, now = Date.now()) {
       md_chars: v2 ? rec.fmt_chars.md : null,
       txt_chars: v2 ? rec.fmt_chars.txt : null,
       chat_chars: v2 ? rec.fmt_chars.chat : null,
+      // version 3: the characters counted against PDF / HTML (NULL = count fmt_chars)
+      vs_pdf_chars: v3 ? rec.vs_chars.pdf : null,
+      vs_html_chars: v3 ? rec.vs_chars.html : null,
     });
   }
   return { rows };
@@ -123,7 +142,8 @@ export function parsePayload(body, now = Date.now()) {
  * A hash of the record's numbers: sending the same record again changes nothing. With a
  * `seq` (schema 2) it is part of the hash, so two identical loads on one day are two rows;
  * without one (schema 1) the hash is the same as before seq existed. Version 2 records add
- * their chat count and per-format characters; version 1 hashes are unchanged.
+ * their chat count and per-format characters, version 3 what they are counted against; version 1
+ * and 2 hashes are unchanged.
  */
 export async function rowHash(row) {
   const parts = [
@@ -134,6 +154,7 @@ export async function rowHash(row) {
   if (row.pdf_chars != null) {
     parts.push(`chat${row.chat}`, `fc${row.pdf_chars},${row.html_chars},${row.md_chars},${row.txt_chars},${row.chat_chars}`);
   }
+  if (row.vs_pdf_chars != null) parts.push(`vs${row.vs_pdf_chars},${row.vs_html_chars}`);
   const text = parts.join("|");
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");

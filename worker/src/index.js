@@ -14,8 +14,8 @@ import { MAX_BODY, parsePayload, rowHash } from "./validate.js";
 
 const INSERT =
   "INSERT OR IGNORE INTO loads (h, id, day, docs, pdf, html, md, txt, src_bytes, raw, chars, lib_docs, lib_chars, tk, " +
-  "chat, pdf_chars, html_chars, md_chars, txt_chars, chat_chars) " +
-  "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)";
+  "chat, pdf_chars, html_chars, md_chars, txt_chars, chat_chars, vs_pdf_chars, vs_html_chars) " +
+  "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)";
 // Reading the converted text instead of the original costs fewer tokens. Measured with
 // count_tokens on 85 reports (README, "What it saves"): raw HTML = 1.73x its converted text,
 // a PDF read as a document = 2.2x. So per converted character, HTML saves 0.73 and PDF 1.2.
@@ -23,9 +23,12 @@ const INSERT =
 export const SAVED_PER_CHAR = { html: 0.73, pdf: 1.2 };
 // Tokens are estimated per record with the characters-per-1000-tokens the app assumed (tk).
 const SQUEEZE = "COALESCE(SUM(MAX(raw - chars, 0) * 1000.0 / tk), 0)";
-// version 1 records have NULL characters per format: they add nothing here
+// Counted against what the user would otherwise have read: version 3 records say (vs_*_chars),
+// version 2 records count the loaded format, version 1 records (NULL characters) add nothing.
+const VS_HTML = "COALESCE(vs_html_chars, html_chars, 0)";
+const VS_PDF = "COALESCE(vs_pdf_chars, pdf_chars, 0)";
 const CONVERT =
-  `COALESCE(SUM((COALESCE(html_chars, 0) * ${SAVED_PER_CHAR.html} + COALESCE(pdf_chars, 0) * ${SAVED_PER_CHAR.pdf}) * 1000.0 / tk), 0)`;
+  `COALESCE(SUM((${VS_HTML} * ${SAVED_PER_CHAR.html} + ${VS_PDF} * ${SAVED_PER_CHAR.pdf}) * 1000.0 / tk), 0)`;
 const STATS =
   // TOTAL, not SUM: an integer SUM that overflows is an error, and the stats would fail for good
   "SELECT COUNT(DISTINCT id) AS installs, COUNT(*) AS loads, TOTAL(docs) AS docs, " +
@@ -137,7 +140,7 @@ async function receive(request, env) {
     statements.push(
       env.DB.prepare(INSERT).bind(
         h, r.id, r.day, r.docs, r.pdf, r.html, r.md, r.txt, r.src_bytes, r.raw, r.chars, r.lib_docs, r.lib_chars, r.tk,
-        r.chat, r.pdf_chars, r.html_chars, r.md_chars, r.txt_chars, r.chat_chars,
+        r.chat, r.pdf_chars, r.html_chars, r.md_chars, r.txt_chars, r.chat_chars, r.vs_pdf_chars, r.vs_html_chars,
       ),
     );
   }

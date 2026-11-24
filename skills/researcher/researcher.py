@@ -12,6 +12,7 @@ Usage: researcher.py [SET ...]             popup, then write the ticked docs as 
        researcher.py --usage               local totals: characters and tokens saved
        researcher.py --usage-export [FILE] write the anonymous usage records to a file (not sent)
        researcher.py --usage-share on|off  share the anonymous usage counts with the project or not
+       researcher.py --usage-before pdf|html|none  how you read research before (for the saving)
        researcher.py --usage-send [--dry-run]  send the records not sent yet (only when sharing is on)
        researcher.py --init [LIBRARY]      write a starter config.toml
        researcher.py --sessions | --rename ID NAME | --resume ID | --session-load ID
@@ -162,6 +163,9 @@ library = "{library}"
 # [usage]
 # log = false
 # share = false
+# How you read research before (pdf or html): a document that also exists in that format
+# counts its conversion saving against it (`researcher.py --usage-before pdf|html|none`).
+# before = "pdf"
 """
 
 
@@ -1353,8 +1357,9 @@ def write_outputs(out_dir, docs, texts, paths):
 
 EXPORT_SCHEMA = 1  # the file --usage-export writes; each record inside has its own version
 # Record versions: 1 had counts per format (pdf, html, md, txt); 2 adds chats loaded as context to
-# `fmt` and `fmt_chars`, the loaded characters per format. Both are read and sent.
-RECORD_VERSION = 2
+# `fmt` and `fmt_chars`, the loaded characters per format; 3 adds `vs_chars`, the same characters
+# per format the user would otherwise have read (see usage_before). All are read and sent.
+RECORD_VERSION = 3
 # Reading the converted text instead of the original costs fewer tokens: measured with count_tokens
 # on 85 reports (README, "What it saves"), raw HTML = 1.73x its text and a PDF read as a document
 # = 2.2x. So per converted character HTML saves 0.73 and PDF 1.2 (markdown, text and chats are read
@@ -1406,6 +1411,27 @@ def usage_share(cfg):
     return "on" if val is True else "off" if val is False else "not decided"
 
 
+def usage_before(cfg):
+    """How the user read research before the researcher: `[usage] before = "pdf"` or `"html"`. A
+    document that exists in that format is counted against it; any other document (and every
+    document when `before` is not set) against the format of the file loaded, the one copy kept."""
+    val = usage_section(cfg).get("before")
+    return val if val in ("pdf", "html") else None
+
+
+def has_twin(path, form):
+    """The same document in another format: `path` with its extension swapped (x.html -> x.pdf)."""
+    exts = {"pdf": (".pdf", ".PDF"), "html": (".html", ".htm", ".HTML", ".HTM")}.get(form, ())
+    stem = os.path.splitext(path)[0]
+    return any(os.path.isfile(stem + e) for e in exts)
+
+
+def counted_as(path, before):
+    """What a document loaded from `path` is counted against: see usage_before."""
+    loaded = format_of(path)
+    return before if before and before != loaded and has_twin(path, before) else loaded
+
+
 def usage_url(cfg):
     """Where records are sent: `[usage] url`, or the project's receiver."""
     val = usage_section(cfg).get("url")
@@ -1435,30 +1461,34 @@ def format_of(path):
 
 
 def known_version(rec):
-    return isinstance(rec, dict) and rec.get("v") in (1, 2)
+    return isinstance(rec, dict) and rec.get("v") in (1, 2, 3)
 
 
-def usage_build(counts, src_bytes, raw, lib):
+def usage_build(counts, src_bytes, raw, lib, vs=None):
     """One load as numbers. counts = {format: (documents, characters)}; lib = (documents, characters)
-    of everything that could have been loaded. Characters, not tokens: the reader applies its ratio."""
+    of everything that could have been loaded; vs = {format: characters} counted against (None = as
+    loaded). Characters, not tokens: the reader applies its ratio."""
     fmt = {k: counts.get(k, (0, 0))[0] for k in FORMS}
     fmt_chars = {k: counts.get(k, (0, 0))[1] for k in FORMS}
+    vs_chars = dict(fmt_chars) if vs is None else {k: vs.get(k, 0) for k in FORMS}
     return {"v": RECORD_VERSION, "day": datetime.date.today().isoformat(), "id": install_id(),
-            "docs": sum(fmt.values()), "fmt": fmt, "fmt_chars": fmt_chars,
+            "docs": sum(fmt.values()), "fmt": fmt, "fmt_chars": fmt_chars, "vs_chars": vs_chars,
             "src_bytes": src_bytes, "raw": raw, "chars": sum(fmt_chars.values()),
             "lib_docs": lib[0], "lib_chars": lib[1], "tk": CHARS_PER_K}
 
 
-def usage_record(docs, texts, paths):
-    """The record of one library load."""
-    counts, src_bytes = {}, 0
+def usage_record(docs, texts, paths, before=None):
+    """The record of one library load; before = `[usage] before` (see usage_before)."""
+    counts, vs, src_bytes = {}, {}, 0
     for d in docs:
         n, c = counts.get(format_of(paths[d]), (0, 0))
         counts[format_of(paths[d])] = (n + 1, c + len(texts[d]))
+        k = counted_as(paths[d], before)
+        vs[k] = vs.get(k, 0) + len(texts[d])
         src_bytes += os.path.getsize(paths[d])
     lib = [d for d in paths if d in texts]
     return usage_build(counts, src_bytes, sum(texts.raw_chars(d) for d in docs),
-                       (len(lib), sum(len(texts[d]) for d in lib)))
+                       (len(lib), sum(len(texts[d]) for d in lib)), vs)
 
 
 def file_size(path):
@@ -1542,11 +1572,14 @@ def usage_summary(recs):
     tot["tokens_unticked"] = sum(tok(max(0, num(r, "lib_chars") - num(r, "chars")), r)
                                  for r in recs)
     tot["loads"] = len(recs)
-    # reading text instead of the HTML/PDF originals (records that say their formats only)
-    with_formats = [r for r in recs if isinstance(r.get("fmt_chars"), dict)]
+    # reading text instead of the HTML/PDF originals (records that say their formats only),
+    # counted against what the user read before (version 3), else the loaded format
+    def against(r):
+        return r["vs_chars"] if isinstance(r.get("vs_chars"), dict) else r.get("fmt_chars")
+    with_formats = [r for r in recs if isinstance(against(r), dict)]
     tot["loads_with_formats"] = len(with_formats)
     tot["tokens_converted"] = sum(
-        tok(sum(per * num(r["fmt_chars"], k) for k, per in SAVED_PER_CHAR.items()), r)
+        tok(sum(per * num(against(r), k) for k, per in SAVED_PER_CHAR.items()), r)
         for r in with_formats)
     return tot
 
@@ -1566,7 +1599,8 @@ def usage_report(recs):
         f"squeezed away: {t['squeezed']:>10} chars  (~{t['tokens_squeezed'] / 1000:.0f}k tokens, "
         f"{pct}% of the converted text)",
         f"converted:     ~{t['tokens_converted'] / 1000:.0f}k tokens saved by reading text instead of "
-        f"the HTML/PDF originals (from measured ratios, {t['loads_with_formats']} of {n} loads say "
+        f"the HTML/PDF originals (counted against [usage] before where set; from measured ratios, "
+        f"{t['loads_with_formats']} of {n} loads say "
         "their formats)",
         f"left unticked: {t['unticked']:>10} chars  (~{t['tokens_unticked'] / 1000:.0f}k tokens, "
         "against loading the whole library every time: a ceiling, not a measurement)",
@@ -1689,7 +1723,20 @@ def share_line(share, waiting):
 
 def set_share(cfg_path, on):
     """Put `share = true|false` under [usage] in the config (comments and the rest kept)."""
-    line = f"share = {'true' if on else 'false'}"
+    want = "on" if on else "off"
+    set_usage(cfg_path, "share", "true" if on else "false", lambda c: usage_share(c) == want)
+
+
+def set_before(cfg_path, form):
+    """Put `before = "pdf"|"html"|"none"` under [usage] in the config."""
+    want = None if form == "none" else form
+    set_usage(cfg_path, "before", f'"{form}"', lambda c: usage_before(c) == want)
+
+
+def set_usage(cfg_path, key, value, check):
+    """Put `key = value` under [usage] in the config (comments and the rest kept); `check` must
+    hold for the config as it would be written."""
+    line = f"{key} = {value}"
     try:
         with open(cfg_path, encoding="utf-8", newline="") as f:  # keep the file's line endings
             old = f.read()
@@ -1709,9 +1756,9 @@ def set_share(cfg_path, on):
             nxt = re.search(r"(?m)^[ \t]*\[", old[start:])
             end = start + nxt.start() if nxt else len(old)
             section = old[start:end]
-            key = re.compile(r"(?m)^[ \t]*share[ \t]*=.*$")
-            if key.search(section):
-                section = key.sub(lambda _: line, section, count=1)
+            pat = re.compile(rf"(?m)^[ \t]*{key}[ \t]*=.*$")
+            if pat.search(section):
+                section = pat.sub(lambda _: line, section, count=1)
             else:
                 section = f"{line}\n{section}"
             head = old[:start] if old[:start].endswith("\n") else old[:start] + "\n"
@@ -1722,7 +1769,7 @@ def set_share(cfg_path, on):
         parsed = tomllib.loads(body)
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(str(e))
-    if usage_share(parsed) != ("on" if on else "off"):
+    if not check(parsed):
         raise ConfigError("the config would not read back the same answer")
     os.makedirs(os.path.dirname(os.path.abspath(cfg_path)), exist_ok=True)
     write_atomic(cfg_path, body)
@@ -2491,6 +2538,9 @@ def main(argv=None):
     ap.add_argument("--usage-share", choices=("on", "off"),
                     help="share the anonymous usage counts with the project (on) or not (off); "
                          "saved in the config")
+    ap.add_argument("--usage-before", choices=("pdf", "html", "none"),
+                    help="how you read research before the researcher (pdf, html), counted against in "
+                         "the conversion saving; none = the format of each file loaded. Saved in the config")
     ap.add_argument("--usage-send", action="store_true",
                     help="send the usage records not sent yet (only when sharing is on)")
     ap.add_argument("--dry-run", action="store_true",
@@ -2504,7 +2554,7 @@ def main(argv=None):
     cfg_path = args.config or os.path.join(config_home(), "config.toml")
     state_path = os.path.join(os.path.dirname(cfg_path), "choices.json")
 
-    if args.usage or args.usage_send or args.usage_share:
+    if args.usage or args.usage_send or args.usage_share or args.usage_before:
         try:
             cfg = load_config(cfg_path)
         except ConfigError as e:
@@ -2524,6 +2574,20 @@ def main(argv=None):
             else:
                 print(f"USAGE SHARING: off (saved as `share = false` under [usage] in {cfg_path}); "
                       "nothing is sent")
+            return 0
+        if args.usage_before:
+            form = args.usage_before
+            try:
+                set_before(cfg_path, form)
+            except (ConfigError, OSError) as e:
+                print(f"CONFIG ERROR: could not save `before` under [usage] in {cfg_path}: {e}")
+                return 6
+            if form == "none":
+                print(f'USAGE BEFORE: none (saved as `before = "none"` under [usage] in {cfg_path}); '
+                      "each document counts against the format of the file loaded")
+            else:
+                print(f'USAGE BEFORE: {form} (saved as `before = "{form}"` under [usage] in {cfg_path}); '
+                      f"a document that also exists as {form} counts its conversion saving against {form}")
             return 0
         if args.usage_send:
             return usage_send_main(cfg, args.dry_run)
@@ -2720,7 +2784,7 @@ def research_finish(r, args, cfg_path, state_path, names_path, ui_path, picks):
     share_note = None
     if docs and usage_enabled(cfg):
         try:  # the log must never break a load
-            share_note = finish_usage(cfg, cfg_path, usage_record(docs, texts, paths))
+            share_note = finish_usage(cfg, cfg_path, usage_record(docs, texts, paths, usage_before(cfg)))
         except OSError:
             pass
     shown = state_names(names_path, "docs")

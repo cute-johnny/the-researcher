@@ -19,10 +19,11 @@ use crate::util;
 /// The file `--usage-export` writes is request schema 1; each record inside has its own version.
 pub const EXPORT_SCHEMA: i64 = 1;
 /// Record versions: 1 had counts per format (pdf, html, md, txt); 2 adds chats loaded as context
-/// to `fmt` and `fmt_chars`, the loaded characters per format. Both are read and sent.
-const RECORD_VERSION: i64 = 2;
+/// to `fmt` and `fmt_chars`, the loaded characters per format; 3 adds `vs_chars`, the same
+/// characters per format the user would otherwise have read (see `before`). All are read and sent.
+const RECORD_VERSION: i64 = 3;
 fn known_version(r: &Value) -> bool {
-    r.is_object() && matches!(r.get("v").and_then(Value::as_i64), Some(1 | 2))
+    r.is_object() && matches!(r.get("v").and_then(Value::as_i64), Some(1..=3))
 }
 /// Reading the converted text instead of the original costs fewer tokens: measured with
 /// count_tokens on 85 reports (README, "What it saves"), raw HTML = 1.73x its text and a PDF
@@ -92,6 +93,43 @@ pub fn share(cfg: &toml::Table) -> Share {
     }
 }
 
+/// How the user read research before the researcher: `[usage] before = "pdf"` or `"html"`.
+/// A document that exists in that format is counted against it; any other document (and every
+/// document when `before` is not set) against the format of the file loaded, the one copy kept.
+pub fn before(cfg: &toml::Table) -> Option<&'static str> {
+    match usage_table(cfg).and_then(|t| t.get("before")).and_then(toml::Value::as_str) {
+        Some("pdf") => Some("pdf"),
+        Some("html") => Some("html"),
+        _ => None,
+    }
+}
+
+/// The same document in another format: `path` with its extension swapped (`x.html` -> `x.pdf`).
+fn has_twin(path: &str, form: &str) -> bool {
+    let exts: &[&str] = match form {
+        "pdf" => &[".pdf", ".PDF"],
+        "html" => &[".html", ".htm", ".HTML", ".HTM"],
+        _ => return false,
+    };
+    let (stem, _) = util::split_ext(path);
+    exts.iter().any(|e| fs::metadata(format!("{stem}{e}")).is_ok_and(|m| m.is_file()))
+}
+
+/// What a document loaded from `path` is counted against: see `before`.
+fn counted_as(path: &str, before: Option<&str>) -> &'static str {
+    let loaded = format_of(path);
+    match before {
+        Some(b) if b != loaded && has_twin(path, b) => {
+            if b == "pdf" {
+                "pdf"
+            } else {
+                "html"
+            }
+        }
+        _ => loaded,
+    }
+}
+
 /// Where records are sent: `[usage] url`, or the project's receiver.
 pub fn url(cfg: &toml::Table) -> String {
     usage_table(cfg)
@@ -129,8 +167,10 @@ fn format_of(path: &str) -> &'static str {
 }
 
 /// One load as numbers. Characters, not tokens: the reader applies its own ratio.
+/// `vs`: characters per format counted against (None = the same as loaded).
 fn build(
     counts: &BTreeMap<&str, (usize, usize)>,
+    vs: Option<&BTreeMap<&str, usize>>,
     src_bytes: u64,
     raw: usize,
     lib: (usize, usize),
@@ -138,6 +178,10 @@ fn build(
     let get = |k: &str| counts.get(k).copied().unwrap_or((0, 0));
     let fmt: BTreeMap<&str, usize> = FORMS.iter().map(|k| (*k, get(k).0)).collect();
     let fmt_chars: BTreeMap<&str, usize> = FORMS.iter().map(|k| (*k, get(k).1)).collect();
+    let vs_chars: BTreeMap<&str, usize> = match vs {
+        Some(v) => FORMS.iter().map(|k| (*k, v.get(k).copied().unwrap_or(0))).collect(),
+        None => fmt_chars.clone(),
+    };
     Ok(json!({
         "v": RECORD_VERSION,
         "day": chrono::Local::now().format("%Y-%m-%d").to_string(),
@@ -145,6 +189,7 @@ fn build(
         "docs": fmt.values().sum::<usize>(),
         "fmt": fmt,
         "fmt_chars": fmt_chars,
+        "vs_chars": vs_chars,
         "src_bytes": src_bytes,
         "raw": raw,
         "chars": fmt_chars.values().sum::<usize>(),
@@ -154,19 +199,27 @@ fn build(
     }))
 }
 
-/// The record of one library load.
-pub fn record(docs: &[String], texts: &mut Texts, paths: &BTreeMap<String, String>) -> std::io::Result<Value> {
+/// The record of one library load; `before` = `[usage] before` (see `before`).
+pub fn record(
+    docs: &[String],
+    texts: &mut Texts,
+    paths: &BTreeMap<String, String>,
+    before: Option<&str>,
+) -> std::io::Result<Value> {
     let mut counts: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    let mut vs: BTreeMap<&str, usize> = BTreeMap::new();
     let mut src_bytes = 0u64;
     for d in docs {
+        let n = texts.len(d);
         let c = counts.entry(format_of(&paths[d])).or_default();
         c.0 += 1;
-        c.1 += texts.len(d);
+        c.1 += n;
+        *vs.entry(counted_as(&paths[d], before)).or_default() += n;
         src_bytes += fs::metadata(&paths[d])?.len();
     }
     let lib: Vec<&String> = paths.keys().filter(|d| texts.has(d)).collect();
     let lib_chars: usize = lib.iter().map(|d| texts.len(d)).sum();
-    build(&counts, src_bytes, docs.iter().map(|d| texts.raw_chars(d)).sum(), (lib.len(), lib_chars))
+    build(&counts, Some(&vs), src_bytes, docs.iter().map(|d| texts.raw_chars(d)).sum(), (lib.len(), lib_chars))
 }
 
 /// The record of earlier Claude Code chats loaded as context: `chats` = (characters, transcript
@@ -175,7 +228,7 @@ pub fn record(docs: &[String], texts: &mut Texts, paths: &BTreeMap<String, Strin
 pub fn chat_record(chats: &[(usize, u64)], lib: (usize, usize)) -> std::io::Result<Value> {
     let chars: usize = chats.iter().map(|c| c.0).sum();
     let counts = BTreeMap::from([("chat", (chats.len(), chars))]);
-    build(&counts, chats.iter().map(|c| c.1).sum(), chars, lib)
+    build(&counts, None, chats.iter().map(|c| c.1).sum(), chars, lib)
 }
 
 /// Log the record of a finished load and, when the user said yes, send it in the background.
@@ -245,7 +298,9 @@ pub fn summary(recs: &[Value]) -> Summary {
         t.tokens += tok(chars, r);
         t.tokens_squeezed += tok(raw - chars, r);
         t.tokens_unticked += tok((lib - chars).max(0.0), r);
-        if let Some(fc) = r.get("fmt_chars").and_then(Value::as_object) {
+        // counted against what the user read before (version 3), else the loaded format
+        let fc = r.get("vs_chars").or_else(|| r.get("fmt_chars")).and_then(Value::as_object);
+        if let Some(fc) = fc {
             t.loads_with_formats += 1;
             let saved: f64 =
                 SAVED_PER_CHAR.iter().map(|(k, per)| per * fc.get(*k).and_then(Value::as_f64).unwrap_or(0.0)).sum();
@@ -289,7 +344,7 @@ pub fn report(recs: &[Value]) -> String {
             pct as i64
         ),
         format!(
-            "converted:     ~{:.0}k tokens saved by reading text instead of the HTML/PDF originals (from measured ratios, {} of {} loads say their formats)",
+            "converted:     ~{:.0}k tokens saved by reading text instead of the HTML/PDF originals (counted against [usage] before where set; from measured ratios, {} of {} loads say their formats)",
             t.tokens_converted / 1000.0,
             t.loads_with_formats,
             t.loads
@@ -448,6 +503,37 @@ mod tests {
         assert_eq!(t.unticked, 20700.0);
         assert!((t.tokens_squeezed - 1000.0).abs() < 1e-9);
         assert!((t.tokens_unticked - 9000.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn summary_counts_against_before() {
+        // 1000 chars loaded from HTML; version 3 says they count against PDF
+        let rec = |v: i64| {
+            json!({"v": v, "docs": 1, "raw": 1000, "chars": 1000, "lib_chars": 1000, "tk": 1000,
+                   "fmt_chars": {"chat": 0, "html": 1000, "md": 0, "pdf": 0, "txt": 0},
+                   "vs_chars": {"chat": 0, "html": 0, "md": 0, "pdf": 1000, "txt": 0}})
+        };
+        assert!((summary(&[rec(3)]).tokens_converted - 1200.0).abs() < 1e-9);
+        let mut v2 = rec(2);
+        v2.as_object_mut().unwrap().remove("vs_chars");
+        assert!((summary(&[v2]).tokens_converted - 730.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn counted_against_before() {
+        let dir = std::env::temp_dir().join(format!("researcher-vs-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = |n: &str| dir.join(n).to_string_lossy().into_owned();
+        for n in ["both.html", "both.pdf", "only.html", "notes.md", "notes.PDF", "paper.pdf"] {
+            fs::write(p(n), "x").unwrap();
+        }
+        assert_eq!(counted_as(&p("both.html"), Some("pdf")), "pdf");
+        assert_eq!(counted_as(&p("both.html"), None), "html"); // nothing set: the loaded format
+        assert_eq!(counted_as(&p("only.html"), Some("pdf")), "html"); // one copy: that one
+        assert_eq!(counted_as(&p("notes.md"), Some("pdf")), "pdf");
+        assert_eq!(counted_as(&p("notes.md"), Some("html")), "md");
+        assert_eq!(counted_as(&p("paper.pdf"), Some("html")), "pdf");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

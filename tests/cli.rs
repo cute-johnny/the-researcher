@@ -131,8 +131,10 @@ fn load_logs_counts_only() {
     assert_eq!(recs.len(), 1);
     let r = &recs[0];
     assert_eq!(r["docs"], 3);
-    assert_eq!(r["v"], 2);
+    assert_eq!(r["v"], 3);
     assert_eq!(r["fmt"], serde_json::json!({"pdf": 0, "html": 1, "md": 1, "txt": 1, "chat": 0}));
+    // no [usage] before: every document counts against the format it was loaded from
+    assert_eq!(r["vs_chars"], r["fmt_chars"]);
     // the loaded characters per format add up to the loaded characters
     let fc = r["fmt_chars"].as_object().unwrap();
     assert_eq!(fc.values().map(|v| v.as_u64().unwrap()).sum::<u64>(), r["chars"].as_u64().unwrap());
@@ -445,6 +447,32 @@ fn exclude_globs() {
     write(&e.cfg, &format!("exclude = [\"web/*\", \"app/*\"]\n{}", read(&e.cfg)));
     let (_, out) = e.run(&["--sync"]);
     assert!(out.contains("text copy: 3 of 3 docs"), "{out}");
+}
+
+#[test]
+fn load_counts_against_the_format_read_before() {
+    let e = Env::new();
+    write(&e.lib.join("rust/linux.pdf"), "%PDF"); // the HTML report also exists as PDF
+    write(&e.lib.join("rust/memory-a.pdf"), "%PDF"); // and the markdown one
+    let (code, out) = e.run(&["--usage-before", "pdf"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.starts_with("USAGE BEFORE: pdf"), "{out}");
+    assert!(read(&e.cfg).contains("[usage]\nbefore = \"pdf\"\n"), "{}", read(&e.cfg));
+    e.run(&["--no-popup", "rust"]);
+    let r = &e.records()[0];
+    let (fc, vs) = (&r["fmt_chars"], &r["vs_chars"]);
+    assert_eq!(vs["pdf"].as_u64().unwrap(), fc["html"].as_u64().unwrap() + fc["md"].as_u64().unwrap());
+    assert_eq!(vs["html"], 0);
+    assert_eq!(vs["md"], 0);
+    assert_eq!(vs["txt"], fc["txt"]); // memory-b has no PDF: the one copy it has
+    // set back: the loaded formats again; the line is replaced, not added
+    e.run(&["--usage-before", "none"]);
+    assert_eq!(read(&e.cfg).matches("before =").count(), 1);
+    e.run(&["--no-popup", "rust"]);
+    let r = &e.records()[1];
+    assert_eq!(r["vs_chars"], r["fmt_chars"]);
+    let (code, _) = e.run(&["--usage-before", "md"]);
+    assert_ne!(code, 0);
 }
 
 #[test]
@@ -1480,8 +1508,9 @@ fn a_context_load_is_logged_and_counted() {
     let recs = s.e.records();
     assert_eq!(recs.len(), 1);
     let r = &recs[0];
-    assert_eq!(r["v"], 2);
+    assert_eq!(r["v"], 3);
     assert_eq!(r["docs"], 2);
+    assert_eq!(r["vs_chars"], r["fmt_chars"]); // a chat is never counted against a file format
     assert_eq!(r["fmt"], serde_json::json!({"pdf": 0, "html": 0, "md": 0, "txt": 0, "chat": 2}));
     assert_eq!(r["fmt_chars"]["chat"], r["chars"]);
     assert_eq!(r["raw"], r["chars"]); // a chat is read as written: nothing squeezed
@@ -1551,7 +1580,7 @@ fn chat_loads_are_sent_like_library_loads() {
     assert!(!out.contains("USAGE SHARING"), "{out}");
     let body = got.recv_timeout(Duration::from_secs(20)).expect("the background send arrives");
     assert_eq!(body["schema"], 2);
-    assert_eq!(body["loads"][0]["v"], 2);
+    assert_eq!(body["loads"][0]["v"], 3);
     assert_eq!(body["loads"][0]["fmt"]["chat"], 1);
 }
 
