@@ -2,7 +2,7 @@
 
 **A research loader for Claude.**
 
-<p align="center"><img src="docs/img/header.jpg" alt="A white robot kneels in a field of grass and dandelions at sunset, looking at a dandelion clock in its hand" width="480"></p>
+<p align="center"><img src="docs/img/header.jpg" alt="A white robot sits on a mossy rock by a misty mountain lake at sunrise, reading an old book, chin resting on its hand" width="720"></p>
 
 [![tokens squeezed](https://the-researcher-usage.ludalunizz.workers.dev/v1/badge/squeezed.svg)](#sharing-opt-in) [![tokens not loaded](https://the-researcher-usage.ludalunizz.workers.dev/v1/badge/not-loaded.svg)](#sharing-opt-in)   *so far, by all users*
 
